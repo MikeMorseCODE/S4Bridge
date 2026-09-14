@@ -1,0 +1,28 @@
+plugins {
+    id 'com.android.application' version '8.10.1'
+}
+
+android {
+    namespace 'com.s4bridge.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.s4bridge.app'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['src']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

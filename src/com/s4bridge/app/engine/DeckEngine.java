@@ -1,8 +1,12 @@
 package com.s4bridge.app.engine;
 
+import android.content.Context;
 import android.media.MediaPlayer;
+import android.net.Uri;
 
-public class DeckEngine {
+import com.s4bridge.app.core.Playback;
+
+public class DeckEngine implements Playback {
     private final String name;
     private MediaPlayer player;
     private String loadedPath;
@@ -25,6 +29,24 @@ public class DeckEngine {
             next.prepare();
             player = next;
             loadedPath = path;
+            applyGain();
+            return true;
+        } catch (Exception e) {
+            releasePlayer();
+            loadedPath = null;
+            return false;
+        }
+    }
+
+    /** Loads a track selected through Android's Storage Access Framework. */
+    public boolean loadUri(Context context, Uri uri) {
+        releasePlayer();
+        try {
+            MediaPlayer next = new MediaPlayer();
+            next.setDataSource(context, uri);
+            next.prepare();
+            player = next;
+            loadedPath = uri.toString();
             applyGain();
             return true;
         } catch (Exception e) {
@@ -58,6 +80,16 @@ public class DeckEngine {
         try {
             if (player.isPlaying()) player.pause(); else player.start();
         } catch (IllegalStateException ignored) {}
+    }
+
+    public int getPositionMs() {
+        if (player == null) return 0;
+        try { return player.getCurrentPosition(); } catch (IllegalStateException e) { return 0; }
+    }
+
+    public void seekToMs(int positionMs) {
+        if (player == null) return;
+        try { player.seekTo(Math.max(0, positionMs)); } catch (IllegalStateException ignored) {}
     }
 
     public void setChannelVolume(float value) { channelVolume = clamp(value); applyGain(); }
