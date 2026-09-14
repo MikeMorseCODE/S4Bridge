@@ -12,11 +12,16 @@
 - [x] Jog and relative encoders decoded
 
 ## Usable prototype
-- [ ] Android media picker/library
-- [ ] CUE semantics
-- [ ] Controller browser/load
-- [ ] USB reconnect handling
-- [ ] HID parser tests
+- [x] Android media picker/library
+- [x] CUE semantics
+- [x] Controller browser/load
+- [x] USB reconnect handling
+- [x] HID parser tests
+
+Phase 1 is implemented in source and covered by host-JVM tests where it does not
+depend on Android. The USB lifecycle, document providers, MediaPlayer behavior,
+and physical controls still require the on-device checklist in
+`docs/PHASE1-HARDWARE-VALIDATION.md` before being called hardware-verified.
 
 ## Controller feedback
 - [ ] S4 output reports
