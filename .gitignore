@@ -1,0 +1,7 @@
+build/
+sdk/android-34.jar
+signing-native/*.keystore
+*.apk
+*.ap_
+*.dex
+.DS_Store
