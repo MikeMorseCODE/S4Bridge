@@ -1,4 +1,5 @@
 build/
+.gradle/
 sdk/android-34.jar
 signing-native/*.keystore
 *.apk

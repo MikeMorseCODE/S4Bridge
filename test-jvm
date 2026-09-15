@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+cd "$(dirname "$0")"
+OUT="${TMPDIR:-/tmp}/s4bridge-jvm-tests"
+rm -rf "$OUT"
+mkdir -p "$OUT"
+
+javac -source 8 -target 8 -Xlint:-options -d "$OUT" \
+    src/com/s4bridge/app/core/*.java \
+    src/com/s4bridge/app/hardware/S4Mk2Mapping.java \
+    tests/*.java
+
+java -cp "$OUT" CoreBehaviorTest
+java -cp "$OUT" S4Mk2MappingTest
