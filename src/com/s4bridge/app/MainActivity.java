@@ -1,6 +1,10 @@
 package com.s4bridge.app;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.widget.EditText;
+import android.text.InputType;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -41,6 +45,20 @@ import com.s4bridge.app.core.TrackLibrary;
 import com.s4bridge.app.hardware.S4Mk2Mapping;
 import com.s4bridge.app.hardware.Xp2MidiDevice;
 import com.s4bridge.app.core.MidiLearnRouter;
+import com.s4bridge.app.core.PcmClip;
+import com.s4bridge.app.core.PerformanceDeck;
+import com.s4bridge.app.core.Xp2PerformanceController;
+import com.s4bridge.app.hardware.Xp2MidiMapping;
+import com.s4bridge.app.engine.PcmDecoder;
+import com.s4bridge.app.engine.PerformanceAudioOutput;
+import android.os.Handler;
+import android.os.Looper;
+import android.widget.Toast;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -91,6 +109,24 @@ public class MainActivity extends Activity {
     private Xp2MidiDevice xp2;
     private TextView xp2StatusView, xp2MonitorView, xp2LearnView;
     private String xp2Status="XP2 starting";
+    private final PerformanceDeck[] samples=createSamples();
+    private final ThreadPoolExecutor decoder=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<Runnable>(10));
+    private final Future<?>[] loads=new Future<?>[10];
+    private final int[] loadGeneration=new int[10];
+    private boolean destroyed;
+    private long lastMidiMonitor;
+    private final Handler performanceHandler=new Handler(Looper.getMainLooper());
+    private PerformanceAudioOutput audioOutput;
+    private Xp2PerformanceController performanceController;
+    private Xp2MidiMapping xp2Mapping;
+    private final Runnable performanceTick=new Runnable(){public void run(){
+        if(destroyed)return;
+        if(performanceController!=null&&deckA.isPerformanceEnabled())performanceController.updateSync();
+        refreshXp2Leds(); if(currentScreen==3)updateXp2Monitor();
+        performanceHandler.postDelayed(this,100);
+    }};
+    private static PerformanceDeck[] createSamples(){PerformanceDeck[] result=new PerformanceDeck[8];for(int i=0;i<8;i++)result[i]=new PerformanceDeck();return result;}
+
     private final ArrayList<String> xp2Messages=new ArrayList<String>();
     private static final String[] XP2_ACTIONS={"DECK_A_PLAY","DECK_A_CUE","DECK_A_LOAD","DECK_B_PLAY","DECK_B_CUE","DECK_B_LOAD"};
 
@@ -120,7 +156,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         usbManager=(UsbManager)getSystemService(Context.USB_SERVICE);
         if(getSharedPreferences("ui_settings",MODE_PRIVATE).getBoolean("keep_screen",false))getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        buildUi(); restoreLibrary(); registerUsb(); createMapping(); scan(); startXp2(); updateStatus();
+        buildUi(); restoreLibrary(); registerUsb(); createMapping(); scan(); setupPerformance(); startXp2(); updateStatus();
     }
 
     private void buildUi(){
@@ -181,11 +217,19 @@ public class MainActivity extends Activity {
         buildHeader("XP2 MIDI");
         LinearLayout state=card(); xp2StatusView=text(xp2Status,16,CYAN); state.addView(xp2StatusView); content.addView(state,lpCard());
         addAction(content,"Rescan XP2",BLUE,new View.OnClickListener(){public void onClick(View v){if(xp2!=null)xp2.scan();}});
+        LinearLayout audio=card();
+        addPerformanceSwitch(audio); content.addView(audio,lpCard());
+        content.addView(text("BPM is manual. Set the first beat in Transport mode before syncing. Tempo changes also change pitch.",13,MUTED),lpCard());
+        LinearLayout bpms=row();
+        addSmallAction(bpms,"Set A BPM",new View.OnClickListener(){public void onClick(View v){editBpm(0);}});
+        addSmallAction(bpms,"Set B BPM",new View.OnClickListener(){public void onClick(View v){editBpm(1);}});content.addView(bpms,lpCard());
+        content.addView(text(String.format(Locale.US,"A %.1f BPM · B %.1f BPM",deckA.getPerformance().getBpm(),deckB.getPerformance().getBpm()),14,CYAN),lpCard());
+        content.addView(text("XP2 layers: 1 Hot Cues · 2 Loops/Jump · 3 Sampler · 4 Transport/Grid · 5 Rolls · 6 Pad FX · 7 Saved Loops · 8 Transport. SHIFT+pad clears cues/loops or loads a sample from the selected library track.",13,MUTED),lpCard());
         content.addView(text("Tap Learn, then press an XP2 pad/button. Only MIDI notes are learned. Use a dedicated pad mode for these transport actions.",14,MUTED),lpCard());
         xp2LearnView=text("",13,ORANGE); content.addView(xp2LearnView,lpCard()); updateXp2Learn();
         for(int i=0;i<XP2_ACTIONS.length;i++){
             final String action=XP2_ACTIONS[i]; String binding=xp2Router.binding(action);
-            addAction(content,"Learn "+action+" · "+(binding==null?"unassigned":binding),CARD,new View.OnClickListener(){public void onClick(View v){xp2Router.learn(action);updateXp2Learn();}});
+            addAction(content,"Learn "+action+" · "+(binding==null?"unassigned":binding),CARD,new View.OnClickListener(){public void onClick(View v){if(xp2Mapping!=null)xp2Mapping.reset();xp2Router.learn(action);updateXp2Learn();}});
         }
         LinearLayout actions=row();
         addSmallAction(actions,"Cancel learn",new View.OnClickListener(){public void onClick(View v){xp2Router.cancelLearn();updateXp2Learn();}});
@@ -193,7 +237,7 @@ public class MainActivity extends Activity {
         content.addView(actions,lpCard());
         content.addView(text("MIDI MONITOR · newest last · channel shown as 1–16",12,MUTED),lpCard());
         xp2MonitorView=text("",12,GREEN); xp2MonitorView.setTypeface(Typeface.MONOSPACE); content.addView(xp2MonitorView,lpCard()); updateXp2Monitor();
-        content.addView(text("Hot cues, loops, sampler, sync, FX and LED output await engine support and verified XP2 messages.",13,MUTED),lpCard());
+        content.addView(text("Performance layers require Performance audio. Learned notes override factory actions. Eight shared sampler slots play up to the first 15 seconds of loaded tracks.",13,MUTED),lpCard());
     }
 
     private void startXp2(){
@@ -204,11 +248,14 @@ public class MainActivity extends Activity {
         }
         xp2=new Xp2MidiDevice(this,new Xp2MidiDevice.Listener(){
             public void onStatus(String value){xp2Status=value;if(xp2StatusView!=null)xp2StatusView.setText(value);}
-            public void onDisconnected(){xp2Router.releaseAll();xp2Router.cancelLearn();updateXp2Learn();}
+            public void onDisconnected(){xp2Router.releaseAll();xp2Router.cancelLearn();if(xp2Mapping!=null)xp2Mapping.reset();updateXp2Learn();}
             public void onMessage(int port,int status,int data1,int data2){
                 // Ports are distinct streams. Mapping uses only the primary XP2 output port.
                 if(port==0){
+                    boolean learning=xp2Router.getLearning()!=null;
+                    boolean override=xp2Router.hasBinding(status,data1);
                     String learned=xp2Router.onMessage(status,data1,data2);
+                    if(!learning&&!override&&xp2Mapping!=null)xp2Mapping.onMessage(status,data1,data2);
                     if(learned!=null){
                         SharedPreferences.Editor editor=getSharedPreferences("xp2_notes",MODE_PRIVATE).edit().clear();
                         for(String action:XP2_ACTIONS){String binding=xp2Router.binding(action);if(binding!=null)editor.putString(action,binding);}
@@ -216,15 +263,92 @@ public class MainActivity extends Activity {
                     }
                 }
                 xp2Messages.add(String.format(Locale.US,"P%d CH%02d  %02X %02X %02X",port,(status&15)+1,status,data1,data2));
-                while(xp2Messages.size()>24)xp2Messages.remove(0); updateXp2Monitor();
+                while(xp2Messages.size()>24)xp2Messages.remove(0);
+                long now=SystemClock.elapsedRealtime();if(now-lastMidiMonitor>=100){lastMidiMonitor=now;updateXp2Monitor();}
             }
         });
         xp2.start();
     }
+    private void setupPerformance(){
+        audioOutput=new PerformanceAudioOutput(deckA,deckB,samples,new PerformanceAudioOutput.Listener(){public void onAudioError(final String message){runOnUiThread(new Runnable(){public void run(){if(destroyed)return;deckA.pause();deckB.pause();for(PerformanceDeck sample:samples)sample.pause();Toast.makeText(MainActivity.this,"Audio output: "+message,Toast.LENGTH_LONG).show();}});}});
+        performanceController=new Xp2PerformanceController(deckA.getPerformance(),deckB.getPerformance(),samples,new Xp2PerformanceController.Actions(){
+            public void load(int deck){queueLoad(deck==0?deckA:deckB,deck==0?cueA:cueB);}
+            public void browse(int delta){moveBrowser(delta);}
+            public void cue(int deck,boolean pressed){queueCue(deck==0?cueA:cueB,pressed);}
+            public void loadSample(int slot){TrackLibrary.Track selected=library.getSelected();if(selected!=null&&deckA.isPerformanceEnabled())decodeTrack(slot+2,selected);}
+            public void changed(){updateStatus();}
+            public void unsupportedDeck(){Toast.makeText(MainActivity.this,"Decks C/D are not available yet; select A/B on the XP2",Toast.LENGTH_SHORT).show();}
+        });
+        xp2Mapping=new Xp2MidiMapping(new Xp2MidiMapping.Listener(){
+            public void pad(int deck,int mode,int index,boolean shifted,boolean pressed){if(deckA.isPerformanceEnabled())performanceController.pad(deck,mode,index,shifted,pressed);}
+            public void button(int deck,String control,boolean pressed){
+                if("LOAD".equals(control)||"UNSUPPORTED_DECK".equals(control)||deckA.isPerformanceEnabled())performanceController.button(deck,control,pressed);
+            }
+            public void browse(int delta){performanceController.browse(delta);}
+            public void fx(int deck,String control,int slot,float value){if(deckA.isPerformanceEnabled())performanceController.fx(deck,control,slot,value);}
+            public void mode(int deck,int mode){performanceController.mode(deck,mode);if(xp2!=null)xp2.invalidateLeds();}
+        });
+        if(getSharedPreferences("ui_settings",MODE_PRIVATE).getBoolean("performance_audio",false))enablePerformance(true);
+        performanceHandler.post(performanceTick);
+    }
+    private void addPerformanceSwitch(LinearLayout parent){
+        TextView label=text("Performance audio · hot cues, loops, sampler and FX\nChanging audio mode unloads the decks",14,TEXT);parent.addView(label);
+        Switch toggle=new Switch(this);toggle.setText("Enable performance audio");toggle.setTextColor(TEXT);toggle.setChecked(deckA.isPerformanceEnabled());
+        toggle.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener(){public void onCheckedChanged(CompoundButton button,boolean value){enablePerformance(value);getSharedPreferences("ui_settings",MODE_PRIVATE).edit().putBoolean("performance_audio",value).apply();updateStatus();}});parent.addView(toggle);
+    }
+    private void enablePerformance(boolean enabled){
+        xp2Router.releaseAll();xp2Router.cancelLearn();if(xp2Mapping!=null)xp2Mapping.reset();
+        for(int i=0;i<loads.length;i++){loadGeneration[i]++;if(loads[i]!=null)loads[i].cancel(true);}decoder.purge();
+        if(audioOutput!=null)audioOutput.stop();
+        deckA.setPerformanceEnabled(enabled);deckB.setPerformanceEnabled(enabled);cueA.onTrackLoaded();cueB.onTrackLoaded();
+        for(PerformanceDeck sample:samples)sample.load(null);
+        if(enabled&&audioOutput!=null)audioOutput.start();
+        if(xp2!=null)xp2.invalidateLeds();
+    }
+    private void editBpm(final int deck){
+        final PerformanceDeck d=deck==0?deckA.getPerformance():deckB.getPerformance();
+        final EditText input=new EditText(this);input.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);input.setText(String.format(Locale.US,"%.2f",d.getBpm()));input.selectAll();
+        new AlertDialog.Builder(this).setTitle("Deck "+(deck==0?"A":"B")+" BPM (30–300)").setView(input)
+            .setNegativeButton("Cancel",null).setPositiveButton("Set",new DialogInterface.OnClickListener(){public void onClick(DialogInterface dialog,int which){
+                try{d.setBpm(Double.parseDouble(input.getText().toString()));showScreen(3);}
+                catch(IllegalArgumentException e){Toast.makeText(MainActivity.this,"Enter a BPM from 30 to 300",Toast.LENGTH_SHORT).show();}
+            }}).show();
+    }
+    private void decodeTrack(final int target,final TrackLibrary.Track track){
+        if(loads[target]!=null)loads[target].cancel(true);decoder.purge();final int token=++loadGeneration[target];
+        Toast.makeText(this,target<2?"Loading performance track…":"Loading up to 15 seconds into sample "+(target-1),Toast.LENGTH_SHORT).show();
+        final Context app=getApplicationContext();
+        try{loads[target]=decoder.submit(new Runnable(){public void run(){
+            try{
+                int limit=(int)Math.min(96L*1024*1024,Runtime.getRuntime().maxMemory()/8);
+                if(target>=2)limit=(int)Math.min(192000L*4*15,Runtime.getRuntime().maxMemory()/64);
+                final PcmClip clip=PcmDecoder.decode(app,Uri.parse(track.getReference()),limit,target>=2);
+                runOnUiThread(new Runnable(){public void run(){
+                    if(destroyed||token!=loadGeneration[target]||!deckA.isPerformanceEnabled())return;
+                    if(target<2){DeckEngine deck=target==0?deckA:deckB;CueController cue=target==0?cueA:cueB;deck.loadPcm(clip,track.getReference());cue.onTrackLoaded();performanceController.trackLoaded(target);}
+                    else samples[target-2].load(clip);
+                    if(audioOutput!=null&&!audioOutput.isRunning())audioOutput.start();
+                    if(xp2!=null)xp2.invalidateLeds();updateStatus();
+                }});
+            }catch(final Exception e){runOnUiThread(new Runnable(){public void run(){if(!destroyed&&token==loadGeneration[target])Toast.makeText(MainActivity.this,e.getMessage(),Toast.LENGTH_LONG).show();}});}
+        }});}catch(RejectedExecutionException e){Toast.makeText(this,"Audio loading queue is full; try again shortly",Toast.LENGTH_SHORT).show();}
+    }
+    private void refreshXp2Leds(){
+        if(xp2==null||xp2Mapping==null||performanceController==null||!deckA.isPerformanceEnabled()||xp2Router.getLearning()!=null)return;
+        for(int deck=0;deck<2;deck++){
+            PerformanceDeck d=deck==0?deckA.getPerformance():deckB.getPerformance();int mode=xp2Mapping.getMode(deck);
+            for(int index=0;index<16;index++)for(int shift=0;shift<2;shift++){
+                int channel=7+deck*2+shift,note=Xp2MidiMapping.padNote(mode,index);
+                if(!xp2Router.hasBinding(0x90|channel,note))xp2.led(channel,note,performanceController.padLit(deck,mode,index));
+            }
+            xp2.led(deck,20,d.isLooping());xp2.led(deck,53,d.isQuantized());xp2.led(deck,88,performanceController.isSynced(deck));xp2.led(deck,104,d.isSilent());
+            for(int slot=0;slot<3;slot++)xp2.led(4+deck,112+slot,d.isFxSelected(slot));xp2.led(4+deck,118,d.isFxHold());
+        }
+    }
     private void updateXp2Learn(){if(xp2LearnView!=null)xp2LearnView.setText(xp2Router.getLearning()==null?"Learn idle · assignments show channel 0–15:note":"Waiting for note: "+xp2Router.getLearning());}
     private void updateXp2Monitor(){if(xp2MonitorView==null)return;StringBuilder lines=new StringBuilder();for(String line:xp2Messages)lines.append(line).append('\n');xp2MonitorView.setText(lines.length()==0?"Waiting for MIDI…":lines.toString());}
 
-    private void buildSettings(){buildHeader("Settings");final SharedPreferences prefs=getSharedPreferences("ui_settings",MODE_PRIVATE);content.addView(text("DEVICE",12,MUTED));LinearLayout deviceCard=card();addSwitch(deviceCard,"Auto reconnect","Reconnect on USB reattach",prefs.getBoolean("auto_reconnect",true),"auto_reconnect");addSwitch(deviceCard,"Request USB permission","Ask automatically when connected",prefs.getBoolean("auto_permission",true),"auto_permission");addDisabledSwitch(deviceCard,"LED feedback","Future · output reports not implemented");addSwitch(deviceCard,"Keep screen on","Prevent sleep while performing",prefs.getBoolean("keep_screen",false),"keep_screen");content.addView(deviceCard,lpCard());content.addView(text("APP",12,MUTED));LinearLayout app=card();app.addView(text("Theme                                      Dark",14,TEXT));app.addView(text("Log level                                  Info",14,TEXT));app.addView(text("HID display                         Coalesced",14,TEXT));TextView clear=text("Clear capture events                                  ›",14,TEXT);clear.setPadding(0,dp(14),0,dp(8));clear.setOnClickListener(new View.OnClickListener(){public void onClick(View v){recentEvents.clear();eventCount=0;}});app.addView(clear);content.addView(app,lpCard());content.addView(text("ABOUT",12,MUTED));LinearLayout about=card();about.addView(text("S4Bridge v0.1.0",16,TEXT));about.addView(text("Traktor Kontrol S4 MK2 on Android",13,MUTED));about.addView(text("GPL-2.0-or-later · Mapping attribution: Mixxx",13,BLUE));content.addView(about,lpCard());}
+    private void buildSettings(){buildHeader("Settings");final SharedPreferences prefs=getSharedPreferences("ui_settings",MODE_PRIVATE);content.addView(text("DEVICE",12,MUTED));LinearLayout deviceCard=card();addSwitch(deviceCard,"Auto reconnect","Reconnect on USB reattach",prefs.getBoolean("auto_reconnect",true),"auto_reconnect");addSwitch(deviceCard,"Request USB permission","Ask automatically when connected",prefs.getBoolean("auto_permission",true),"auto_permission");addDisabledSwitch(deviceCard,"S4 LED feedback","Future · S4 output reports not implemented");addSwitch(deviceCard,"Keep screen on","Prevent sleep while performing",prefs.getBoolean("keep_screen",false),"keep_screen");content.addView(deviceCard,lpCard());content.addView(text("APP",12,MUTED));LinearLayout app=card();app.addView(text("Theme                                      Dark",14,TEXT));app.addView(text("Log level                                  Info",14,TEXT));app.addView(text("HID display                         Coalesced",14,TEXT));TextView clear=text("Clear capture events                                  ›",14,TEXT);clear.setPadding(0,dp(14),0,dp(8));clear.setOnClickListener(new View.OnClickListener(){public void onClick(View v){recentEvents.clear();eventCount=0;}});app.addView(clear);content.addView(app,lpCard());content.addView(text("ABOUT",12,MUTED));LinearLayout about=card();about.addView(text("S4Bridge v0.1.0",16,TEXT));about.addView(text("Traktor Kontrol S4 MK2 on Android",13,MUTED));about.addView(text("GPL-2.0-or-later · Mapping attribution: Mixxx",13,BLUE));content.addView(about,lpCard());}
 
     private void addSwitch(LinearLayout parent,String title,String subtitle,boolean checked,final String key){LinearLayout row=row();TextView label=text(title+"\n"+subtitle,14,TEXT);row.addView(label,new LinearLayout.LayoutParams(0,dp(62),1f));Switch toggle=new Switch(this);toggle.setChecked(checked);toggle.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener(){public void onCheckedChanged(CompoundButton b,boolean value){getSharedPreferences("ui_settings",MODE_PRIVATE).edit().putBoolean(key,value).apply();if("keep_screen".equals(key)){if(value)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}}});row.addView(toggle);parent.addView(row);}
     private void addDisabledSwitch(LinearLayout p,String t,String s){LinearLayout row=row();row.addView(text(t+"\n"+s,14,MUTED),new LinearLayout.LayoutParams(0,dp(62),1f));Switch sw=new Switch(this);sw.setEnabled(false);row.addView(sw);p.addView(row);}
@@ -404,6 +528,7 @@ public class MainActivity extends Activity {
         TrackLibrary.Track track=library.getSelected();
         if(track==null){log("LIBRARY empty; add tracks first");return;}
         Uri uri=Uri.parse(track.getReference());
+        if(deck.isPerformanceEnabled()){decodeTrack(deck==deckA?0:1,track);return;}
         boolean loaded=deck.loadUri(this,uri);
         if(loaded)cue.onTrackLoaded();
         mixer.setCrossfader(mixer.getCrossfader());
@@ -437,5 +562,5 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume(){super.onResume();if(device==null)scan();if(device!=null&&usbManager.hasPermission(device)&&!captureRunning&&getSharedPreferences("ui_settings",MODE_PRIVATE).getBoolean("auto_reconnect",true))openAndStart();}
 
-    @Override protected void onDestroy(){if(xp2!=null)xp2.stop();stopCapture();closeConnection();deckA.release();deckB.release();try{unregisterReceiver(usbReceiver);}catch(Exception ignored){}super.onDestroy();}
+    @Override protected void onDestroy(){destroyed=true;performanceHandler.removeCallbacks(performanceTick);decoder.shutdownNow();if(audioOutput!=null)audioOutput.stop();if(xp2!=null)xp2.stop();stopCapture();closeConnection();deckA.release();deckB.release();try{unregisterReceiver(usbReceiver);}catch(Exception ignored){}super.onDestroy();}
 }

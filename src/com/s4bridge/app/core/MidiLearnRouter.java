@@ -26,6 +26,10 @@ public final class MidiLearnRouter {
         if (previous != null) bindings.remove(previous);
         bindings.put(channel * 128 + note, control);
     }
+    public boolean hasBinding(int status,int note) {
+        int kind=status&0xf0;
+        return (kind==0x80||kind==0x90)&&bindings.containsKey((status&15)*128+note);
+    }
     public String binding(String control) {
         for (Map.Entry<Integer, String> entry : bindings.entrySet())
             if (entry.getValue().equals(control)) return (entry.getKey() / 128) + ":" + (entry.getKey() % 128);
