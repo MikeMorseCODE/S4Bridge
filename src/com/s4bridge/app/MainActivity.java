@@ -24,6 +24,8 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.SystemClock;
 import android.view.Gravity;
+import android.view.MotionEvent;
+import android.widget.SeekBar;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -60,7 +62,11 @@ public class MainActivity extends Activity {
     private volatile boolean captureRunning;
     private Thread captureThread;
     private byte[] old01, old02;
-    private TextView status, logView, captureSummary;
+    private TextView status, logView, captureSummary, xp2HomeStatus;
+    private final TextView[] deckLabels=new TextView[2];
+    private final Button[] playButtons=new Button[2];
+    private final SeekBar[] volumeSliders=new SeekBar[2];
+    private SeekBar crossfaderSlider;
     private ScrollView logScroll;
     private LinearLayout content, bottomNav, captureEvents;
     private int currentScreen, eventCount, currentReportId, currentReportSize;
@@ -101,7 +107,7 @@ public class MainActivity extends Activity {
         });
         xp2Input=new Xp2MidiInput(this,new Xp2MidiInput.Listener(){
             public void onBytes(byte[] bytes,int offset,int count){xp2.receive(bytes,offset,count);}
-            public void onStatus(String value){xp2Status=value;if(currentScreen==3)showScreen(3);}
+            public void onStatus(String value){xp2Status=value;if(currentScreen==3)showScreen(3);else updateStatus();}
         });
     }
     private void handleXp2(String action,int deck,int slot,boolean pressed){
@@ -162,7 +168,7 @@ public class MainActivity extends Activity {
     }
 
     private void buildBottomNav(){
-        bottomNav.removeAllViews(); String[] labels={"⌂\nHome","⌁\nCapture","▦\nMapping","▤\nMIDI","⚙\nSettings"};
+        bottomNav.removeAllViews(); String[] labels={"⌂\nDecks","⌁\nCapture","▦\nMapping","▤\nMIDI","⚙\nSettings"};
         for(int i=0;i<labels.length;i++){final int index=i; TextView item=text(labels[i],12,i==currentScreen?BLUE:MUTED); item.setGravity(Gravity.CENTER); item.setPadding(0,dp(5),0,dp(3)); item.setOnClickListener(new View.OnClickListener(){public void onClick(View v){showScreen(index);}}); bottomNav.addView(item,new LinearLayout.LayoutParams(0,-1,1f));}
     }
 
@@ -172,16 +178,46 @@ public class MainActivity extends Activity {
     }
 
     private void buildHome(){
-        buildHeader("S4Bridge");
-        LinearLayout connection=card(); status=text("",16,TEXT); status.setTypeface(Typeface.DEFAULT,Typeface.BOLD); connection.addView(status); TextView usb=text("USB controller status · tap to rescan",12,MUTED); connection.addView(usb); connection.setOnClickListener(new View.OnClickListener(){public void onClick(View v){scan();}}); content.addView(connection,lpCard());
-        TextView controller=text("  DECK A          MIXER          DECK B  \n\n       ◉       ▥ ▥ ▥       ◉       \n\n PLAY  CUE       ║       CUE  PLAY",16,CYAN); controller.setGravity(Gravity.CENTER); controller.setTypeface(Typeface.MONOSPACE); controller.setBackground(shape(CARD,BORDER,12)); controller.setPadding(dp(8),dp(22),dp(8),dp(22)); content.addView(controller,new LinearLayout.LayoutParams(-1,dp(170)));
-        LinearLayout facts=card(); facts.addView(text("VID:PID  17cc:1310                         HID mode",13,MUTED)); facts.addView(text("● S4 MK2                         Interface ID 4 · IN 0x84",12,GREEN)); content.addView(facts,lpCard());
-        addAction(content,captureRunning?"■  Stop Capture":"⌁  Start Capture",captureRunning?RED:BLUE,new View.OnClickListener(){public void onClick(View v){if(captureRunning)stopCapture();else openAndStart();showScreen(0);}});
-        LinearLayout actions=row(); addSmallAction(actions,"＋ Add tracks",new View.OnClickListener(){public void onClick(View v){pickTracks();}}); addSmallAction(actions,"↻ Reconnect",new View.OnClickListener(){public void onClick(View v){openAndStart();}}); content.addView(actions,lpCard());
-        LinearLayout libraryCard=card(); libraryCard.addView(text("TRACK LIBRARY",12,MUTED)); libraryCard.addView(text(library.getSelected()==null?"No track selected":library.getSelected().getName(),16,TEXT));
-        LinearLayout browse=row(); addSmallAction(browse,"‹ Previous",new View.OnClickListener(){public void onClick(View v){moveBrowser(-1);showScreen(0);}}); addSmallAction(browse,"Next ›",new View.OnClickListener(){public void onClick(View v){moveBrowser(1);showScreen(0);}}); libraryCard.addView(browse); content.addView(libraryCard,lpCard());
-        LinearLayout decks=row(); addSmallAction(decks,"Load Deck A",new View.OnClickListener(){public void onClick(View v){loadSelected(deckA,cueA);}}); addSmallAction(decks,"Load Deck B",new View.OnClickListener(){public void onClick(View v){loadSelected(deckB,cueB);}}); content.addView(decks,lpCard());
-        logView=text("",10,MUTED); logView.setVisibility(View.GONE); logScroll=new ScrollView(this); logScroll.addView(logView); content.addView(logScroll,new LinearLayout.LayoutParams(1,1));
+        buildHeader("S4Bridge");content.addView(text("PERFORMANCE",12,MUTED));
+        LinearLayout connections=card();status=text("",14,TEXT);connections.addView(status);
+        xp2HomeStatus=text(xp2Status,13,CYAN);connections.addView(xp2HomeStatus);content.addView(connections,lpCard());
+        LinearLayout reconnect=row();addSmallAction(reconnect,"Connect S4",new View.OnClickListener(){public void onClick(View v){scan();if(device!=null&&!usbManager.hasPermission(device))requestUsbPermission();else openAndStart();}});
+        addSmallAction(reconnect,"Connect XP2",new View.OnClickListener(){public void onClick(View v){if(xp2Input!=null)xp2Input.reconnect();}});content.addView(reconnect,lpCard());
+        LinearLayout decks=new LinearLayout(this);
+        boolean wide=getResources().getConfiguration().screenWidthDp>=600;decks.setOrientation(wide?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);
+        for(int i=0;i<2;i++){LinearLayout panel=buildDeck(i);LinearLayout.LayoutParams params=wide?new LinearLayout.LayoutParams(0,-2,1f):new LinearLayout.LayoutParams(-1,-2);params.setMargins(dp(3),dp(6),dp(3),dp(6));decks.addView(panel,params);}content.addView(decks);
+        LinearLayout mix=card();mix.addView(text("MASTER MIX",12,MUTED));mix.addView(text("Deck A                         CROSSFADER                         Deck B",12,TEXT));
+        crossfaderSlider=new SeekBar(this);crossfaderSlider.setMax(1000);crossfaderSlider.setProgress((int)(mixer.getCrossfader()*1000));
+        crossfaderSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar bar,int value,boolean user){if(user)mixer.setCrossfader(value/1000f);}public void onStartTrackingTouch(SeekBar bar){}public void onStopTrackingTouch(SeekBar bar){}});
+        mix.addView(crossfaderSlider,new LinearLayout.LayoutParams(-1,dp(52)));content.addView(mix,lpCard());
+        LinearLayout tracks=card();LinearLayout heading=row();heading.addView(text("TRACK LIBRARY",12,MUTED),new LinearLayout.LayoutParams(0,dp(48),1f));addSmallAction(heading,"＋ Add music",new View.OnClickListener(){public void onClick(View v){pickTracks();}});tracks.addView(heading);
+        if(library.getTracks().isEmpty())tracks.addView(text("Add audio files, select a track, then load a deck.",14,TEXT));
+        else for(int i=0;i<library.getTracks().size();i++){
+            final int index=i;TextView item=text((i==library.getSelectedIndex()?"●  ":"    ")+library.getTracks().get(i).getName(),16,i==library.getSelectedIndex()?CYAN:TEXT);item.setPadding(dp(4),dp(16),dp(4),dp(16));item.setOnClickListener(new View.OnClickListener(){public void onClick(View v){library.moveSelection(index-library.getSelectedIndex());showScreen(0);}});tracks.addView(item);
+        }
+        LinearLayout loads=row();addSmallAction(loads,"Load A",new View.OnClickListener(){public void onClick(View v){loadSelected(deckA,cueA);}});addSmallAction(loads,"Load B",new View.OnClickListener(){public void onClick(View v){loadSelected(deckB,cueB);}});tracks.addView(loads);content.addView(tracks,lpCard());
+        logView=text("",10,MUTED);logView.setVisibility(View.GONE);logScroll=new ScrollView(this);logScroll.addView(logView);content.addView(logScroll,new LinearLayout.LayoutParams(1,1));
+    }
+    private LinearLayout buildDeck(final int index){
+        final DeckEngine deck=index==0?deckA:deckB;final CueController cue=index==0?cueA:cueB;int accent=index==0?CYAN:ORANGE;
+        LinearLayout panel=card();panel.addView(text("DECK "+deck.getName(),13,accent));deckLabels[index]=text("",18,TEXT);panel.addView(deckLabels[index]);
+        LinearLayout transport=row();playButtons[index]=compactButton("PLAY",accent);playButtons[index].setTextColor(BG);playButtons[index].setTextSize(16);
+        playButtons[index].setOnClickListener(new View.OnClickListener(){public void onClick(View v){deck.togglePlay();updateStatus();}});transport.addView(playButtons[index],new LinearLayout.LayoutParams(0,dp(64),1f));
+        Button cueButton=compactButton("CUE",CARD);cueButton.setTextSize(16);cueButton.setOnTouchListener(new View.OnTouchListener(){public boolean onTouch(View v,MotionEvent e){if(e.getAction()==MotionEvent.ACTION_DOWN){cue.onPress();updateStatus();return true;}if(e.getAction()==MotionEvent.ACTION_UP||e.getAction()==MotionEvent.ACTION_CANCEL){cue.onRelease();if(e.getAction()==MotionEvent.ACTION_UP)v.performClick();updateStatus();return true;}return true;}});transport.addView(cueButton,new LinearLayout.LayoutParams(0,dp(64),1f));panel.addView(transport);
+        panel.addView(text("CHANNEL VOLUME",11,MUTED));volumeSliders[index]=new SeekBar(this);volumeSliders[index].setMax(1000);volumeSliders[index].setProgress((int)(deck.getChannelVolume()*1000));
+        volumeSliders[index].setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar bar,int value,boolean user){if(user)deck.setChannelVolume(value/1000f);}public void onStartTrackingTouch(SeekBar bar){}public void onStopTrackingTouch(SeekBar bar){}});panel.addView(volumeSliders[index],new LinearLayout.LayoutParams(-1,dp(52)));return panel;
+    }
+    private void refreshPerformance(){
+        if(currentScreen!=0)return;
+        if(xp2HomeStatus!=null)xp2HomeStatus.setText(xp2Status);
+        for(int i=0;i<2;i++){
+            DeckEngine deck=i==0?deckA:deckB;String title="No track loaded";
+            for(TrackLibrary.Track track:library.getTracks())if(track.getReference().equals(deck.getLoadedPath())){title=track.getName();break;}
+            if(deckLabels[i]!=null)deckLabels[i].setText(title+"\n"+(deck.isPlaying()?"PLAYING":deck.isLoaded()?"READY":"EMPTY"));
+            if(playButtons[i]!=null){playButtons[i].setText(deck.isPlaying()?"PAUSE":"PLAY");playButtons[i].setEnabled(deck.isLoaded());}
+            if(volumeSliders[i]!=null&&!volumeSliders[i].isPressed())volumeSliders[i].setProgress((int)(deck.getChannelVolume()*1000));
+        }
+        if(crossfaderSlider!=null&&!crossfaderSlider.isPressed())crossfaderSlider.setProgress((int)(mixer.getCrossfader()*1000));
     }
 
     private void buildCapture(){
@@ -345,7 +381,7 @@ public class MainActivity extends Activity {
         ClipData clips=data.getClipData();
         if(clips!=null){for(int i=0;i<clips.getItemCount();i++)addTrack(clips.getItemAt(i).getUri());}
         else if(data.getData()!=null)addTrack(data.getData());
-        updateStatus();
+        showScreen(0);
     }
 
     private void addTrack(Uri uri){
@@ -406,8 +442,8 @@ public class MainActivity extends Activity {
     private void updateStatus(){
         runOnUiThread(new Runnable(){public void run(){
             TrackLibrary.Track selected=library.getSelected();
-            if(status!=null)status.setText("♧  Traktor Kontrol S4 MK2\n"+(device==null?"Not connected · tap to scan":(captureRunning?"Connected · Capturing":"Connected · Ready"))+"\n\nA "+(deckA.isPlaying()?"PLAYING":(deckA.isLoaded()?"READY":"EMPTY"))+"  ·  B "+(deckB.isPlaying()?"PLAYING":(deckB.isLoaded()?"READY":"EMPTY"))+"  ·  Library "+library.getTracks().size());
-            updateCaptureSummary();
+            if(status!=null)status.setText("S4 MK2 · "+(device==null?"Not connected":captureRunning?"HID input active":usbManager.hasPermission(device)?"Ready":"USB permission needed"));
+            refreshPerformance();updateCaptureSummary();
         }});
     }
 

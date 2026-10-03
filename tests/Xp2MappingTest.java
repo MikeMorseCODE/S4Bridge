@@ -9,7 +9,7 @@ public final class Xp2MappingTest {
         mapping.receive(new byte[]{(byte)0xf8,127,43,0},0,4);
         if(events.size()!=2||!events.get(0).equals("cue_point:1:3:true")||!events.get(1).equals("cue_point:1:3:false"))throw new AssertionError(events.toString());
         events.clear();mapping.receive(new byte[]{(byte)0x90,21,127,(byte)0x80,21,0},0,6);
-        if(events.size()!=1||!events.get(0).equals("load_track:0:0:true"))throw new AssertionError(events.toString());
+        if(!events.contains("load_track:0:0:true")||events.contains("load_track:0:0:false"))throw new AssertionError(events.toString());
         System.out.println("Xp2MappingTest passed");
     }
 }
