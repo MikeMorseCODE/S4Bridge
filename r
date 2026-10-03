@@ -20,7 +20,7 @@ javac -source 8 -target 8 -classpath sdk/android-34.jar -d build/classes \
 src/com/s4bridge/app/core/*.java \
 src/com/s4bridge/app/engine/*.java \
 src/com/s4bridge/app/hardware/*.java \
-src/com/s4bridge/app/MainActivity.java
+src/com/s4bridge/app/*.java
 
 dx --dex --output=build/dex/classes.dex build/classes
 test -s build/dex/classes.dex

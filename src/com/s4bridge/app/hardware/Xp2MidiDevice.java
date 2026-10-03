@@ -1,6 +1,7 @@
 package com.s4bridge.app.hardware;
 
 import android.content.Context;
+import android.hardware.usb.*;
 import android.media.midi.MidiDevice;
 import android.media.midi.MidiDeviceInfo;
 import android.media.midi.MidiManager;
@@ -23,6 +24,8 @@ public final class Xp2MidiDevice {
         void onDisconnected();
     }
     private final MidiManager manager;
+    private final UsbManager usb;
+    private DirectUsbMidiDevice direct;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Listener listener;
     private final ArrayList<MidiOutputPort> ports = new ArrayList<MidiOutputPort>();
@@ -41,30 +44,53 @@ public final class Xp2MidiDevice {
     public Xp2MidiDevice(Context context, Listener listener) {
         manager = (MidiManager) context.getSystemService(Context.MIDI_SERVICE);
         this.listener = listener;
+        usb=(UsbManager)context.getSystemService(Context.USB_SERVICE);
         leds=new Xp2LedFeedback(new Xp2LedFeedback.Output(){public boolean send(byte[] message){
+            if(direct!=null&&direct.active())return direct.send(message);
             if(feedback==null)return false;
             try{feedback.send(message,0,message.length);return true;}
             catch(IOException e){try{feedback.close();}catch(IOException ignored){}feedback=null;Xp2MidiDevice.this.listener.onStatus("XP2 input active · LED output failed");return false;}
         }});
+        direct=new DirectUsbMidiDevice(context,new Listener(){
+            public void onStatus(String value){Xp2MidiDevice.this.listener.onStatus(value);}
+            public void onDisconnected(){invalidateLeds();Xp2MidiDevice.this.listener.onDisconnected();}
+            public void onMessage(int port,int status,int first,int second){
+                if((status&0xf0)==0x80||(status&0xf0)==0x90)leds.invalidate(status&15,first);
+                Xp2MidiDevice.this.listener.onMessage(port,status,first,second);
+            }
+        });
+    }
+    public UsbDevice[] usbDevices(){return usb.getDeviceList().values().toArray(new UsbDevice[0]);}
+    public void connectUsb(UsbDevice value){disconnect();direct.connect(value);}
+    public String diagnostics(){
+        StringBuilder result=new StringBuilder();
+        result.append("Android MIDI devices: ").append(manager==null?0:manager.getDevices().length);
+        UsbDevice[] devices=usbDevices();result.append("\nUSB devices: ").append(devices.length);
+        for(UsbDevice d:devices){result.append("\n").append(DirectUsbMidiDevice.label(d));
+            for(int i=0;i<d.getInterfaceCount();i++){UsbInterface f=d.getInterface(i);result.append("\n  Interface ").append(f.getId()).append(" class ").append(f.getInterfaceClass()).append("/").append(f.getInterfaceSubclass()).append("/").append(f.getInterfaceProtocol());}}
+        if(devices.length==0)result.append("\nAndroid detects no USB device. Check the USB data/OTG connection and controller power.");
+        return result.toString();
     }
     public void start() {
         if (started) return;
         started = true;
+        direct.start();
         if (manager == null) { listener.onStatus("Android MIDI service unavailable"); return; }
         manager.registerDeviceCallback(callback, handler);
         scan();
     }
     public void scan() {
-        if (!started || manager == null || deviceId != -1) return;
+        if (!started || direct.active() || deviceId != -1) return;
+        if(manager==null){listener.onStatus("Android MIDI unavailable · select Connect USB");return;}
         for (MidiDeviceInfo info : manager.getDevices()) {
             String name = info.getProperties().getString(MidiDeviceInfo.PROPERTY_NAME, "");
             String product = info.getProperties().getString(MidiDeviceInfo.PROPERTY_PRODUCT, "");
             if (info.getType() != MidiDeviceInfo.TYPE_USB
-                || !(name + " " + product).toUpperCase(Locale.US).contains("DDJ-XP2")) continue;
+                || !(name + " " + product).toUpperCase(Locale.US).replaceAll("[^A-Z0-9]", "").contains("DDJXP2")) continue;
             open(info);
             return;
         }
-        listener.onStatus("XP2 not found · connect USB and rescan");
+        listener.onStatus("XP2 not found by Android MIDI · select Connect USB below");
     }
     private void open(final MidiDeviceInfo info) {
         deviceId = info.getId();
@@ -124,6 +150,7 @@ public final class Xp2MidiDevice {
     public void stop() {
         if (!started) return;
         started = false;
+        direct.stop();
         if (manager != null) manager.unregisterDeviceCallback(callback);
         disconnect();
     }

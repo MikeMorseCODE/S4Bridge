@@ -14,6 +14,12 @@ public class DeckEngine implements Playback {
     private volatile boolean performanceEnabled;
     private MediaPlayer player;
     private String loadedPath;
+    private float[] waveform;
+    private String waveformStatus="Load a track";
+    public float[] getWaveform(){return waveform;}
+    public String getWaveformStatus(){return waveformStatus;}
+    public void setWaveform(float[] value,String status){waveform=value;waveformStatus=status;}
+    public int getDurationMs(){if(performanceEnabled)return performance.getDurationMs();if(player==null)return 0;try{return player.getDuration();}catch(IllegalStateException e){return 0;}}
     private volatile float channelVolume = 1.0f;
     private volatile float crossfaderGain = 1.0f;
     private float tempo = 0.0f;
@@ -64,7 +70,7 @@ public class DeckEngine implements Playback {
     public boolean isPerformanceEnabled() { return performanceEnabled; }
     public void setPerformanceEnabled(boolean enabled) {
         if(performanceEnabled==enabled)return;
-        releasePlayer();performance.load(null);loadedPath=null;performanceEnabled=enabled;
+        releasePlayer();performance.load(null);loadedPath=null;setWaveform(null,"Load a track");performanceEnabled=enabled;
     }
     public void loadPcm(PcmClip clip,String reference) { releasePlayer();performance.load(clip);loadedPath=reference; }
     public String getName() { return name; }
@@ -132,7 +138,7 @@ public class DeckEngine implements Playback {
     public float getFilter() { return filter; }
     public void setJogTouched(boolean touched) { jogTouched = touched; }
     public boolean isJogTouched() { return jogTouched; }
-    public void jog(int delta) { /* Native audio engine milestone. */ }
+    public void jog(int delta) { if(isLoaded())seekToMs((int)Math.max(0,Math.min((long)getDurationMs(),(long)getPositionMs()+delta*10L))); }
 
     public void release() { releasePlayer(); performance.load(null); loadedPath = null; }
 

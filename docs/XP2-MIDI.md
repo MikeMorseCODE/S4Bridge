@@ -149,3 +149,29 @@ Physical validation still required:
 - Learned overrides while switching banks, and releasing CUE/roll during detach.
 
 The code is published as a draft for review; on-device success is not claimed.
+
+## USB troubleshooting and touch decks (0.1.1)
+
+Start / Reconnect now requests S4 USB permission when the device was plugged in
+before app launch. Home distinguishes detection, permission, capture and errors,
+and shows XP2 status independently. MIDI > Rescan lists the USB devices Android
+sees and their interfaces. Connect USB explicitly selects a MIDI 1.0 bulk device
+and requests permission, bypassing Android MidiManager discovery. This can take
+ownership from another MIDI app; use only the intended XP2. The S4 HID device is
+excluded from these buttons. Raw MIDI input preserves cable numbers, with factory
+mapping on cable 0 and LED output on cable 0. Reconnect manually after raw USB
+detach. MIDI 2.0 UMP and vendor-specific protocols are not supported.
+
+Home now has two real touch deck surfaces. Each includes a stereo peak waveform,
+playhead, elapsed/total time, jog wheel, Play/Pause and hold CUE. Waveform dragging
+seeks across the whole track; one jog revolution scrubs two seconds. S4 relative
+jog input now scrubs 10 ms per tick, coalesced onto the UI thread every 100 ms.
+These are position seeks, not low-latency vinyl scratch synthesis or pitch nudges.
+MediaPlayer seek precision depends on the media format and Android implementation.
+
+Waveforms are calculated from decoded audio, never placeholder shapes. Performance
+mode reuses its decoded PCM; MediaPlayer mode analyzes separately off the UI
+thread. Whole-track decoding is bounded by the existing 96 MiB / heap-eighth
+limit. Over-limit or unsupported tracks show a waveform-unavailable message;
+MediaPlayer playback can continue. Reload and mode changes invalidate stale jobs.
+The touch UI still needs on-device visual, gesture, and audio validation.

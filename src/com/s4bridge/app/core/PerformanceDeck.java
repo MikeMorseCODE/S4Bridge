@@ -17,6 +17,7 @@ public final class PerformanceDeck implements Playback {
     public synchronized boolean isLoaded() { return clip!=null; }
     public synchronized boolean isPlaying() { return playing; }
     public synchronized int getPositionMs() { return clip==null?0:(int)(position*1000/clip.sampleRate); }
+    public synchronized int getDurationMs() { return clip==null?0:clip.durationMs(); }
     public synchronized double getFrame() { return position; }
     public synchronized void play() { if(clip!=null) { if(position>=clip.frames)position=0; playing=true; } }
     public synchronized void pause() { playing=false; }

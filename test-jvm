@@ -12,6 +12,7 @@ javac -source 8 -target 8 -Xlint:-options -d "$OUT" \
     src/com/s4bridge/app/hardware/MidiStreamParser.java \
     src/com/s4bridge/app/hardware/Xp2MidiMapping.java \
     src/com/s4bridge/app/hardware/Xp2LedFeedback.java \
+    src/com/s4bridge/app/hardware/UsbMidiPackets.java \
     tests/*.java
 
 java -cp "$OUT" CoreBehaviorTest
@@ -20,3 +21,6 @@ java -cp "$OUT" S4Mk2MappingTest
 java -cp "$OUT" Xp2MidiTest
 
 java -cp "$OUT" PerformanceAudioTest
+
+java -cp "$OUT" UsbMidiPacketsTest
+java -cp "$OUT" WaveformTest

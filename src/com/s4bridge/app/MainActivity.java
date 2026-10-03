@@ -67,6 +67,8 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final int VID=0x17CC, PID=0x1310, PICK_TRACKS=1001;
+    private boolean usbPermissionPending;
+    private String s4ConnectionStatus="";
     private static final String ACTION_USB_PERMISSION="com.s4bridge.app.USB_PERMISSION";
     private static final String LIBRARY_PREFS="track_library";
 
@@ -102,7 +104,7 @@ public class MainActivity extends Activity {
         public void cue(boolean isDeckA,boolean pressed){queueCue(isDeckA?cueA:cueB,pressed);}
         public void load(boolean isDeckA){queueLoad(isDeckA?deckA:deckB,isDeckA?cueA:cueB);}
         public void browse(final int delta){runOnUiThread(new Runnable(){public void run(){moveBrowser(delta);}});}
-        public void jog(boolean isDeckA,int delta){if(isDeckA)deckA.jog(delta);else deckB.jog(delta);}
+        public void jog(boolean isDeckA,int delta){pendingJog[isDeckA?0:1].addAndGet(delta);}
     });
     private S4Mk2Mapping mapping;
     private final MidiLearnRouter xp2Router=new MidiLearnRouter(controllerRouter);
@@ -119,9 +121,11 @@ public class MainActivity extends Activity {
     private PerformanceAudioOutput audioOutput;
     private Xp2PerformanceController performanceController;
     private Xp2MidiMapping xp2Mapping;
+    private final java.util.concurrent.atomic.AtomicInteger[] pendingJog={new java.util.concurrent.atomic.AtomicInteger(),new java.util.concurrent.atomic.AtomicInteger()};
     private final Runnable performanceTick=new Runnable(){public void run(){
         if(destroyed)return;
         if(performanceController!=null&&deckA.isPerformanceEnabled())performanceController.updateSync();
+        int jogA=pendingJog[0].getAndSet(0),jogB=pendingJog[1].getAndSet(0);if(jogA!=0)deckA.jog(jogA);if(jogB!=0)deckB.jog(jogB);
         refreshXp2Leds(); if(currentScreen==3)updateXp2Monitor();
         performanceHandler.postDelayed(this,100);
     }};
@@ -138,7 +142,7 @@ public class MainActivity extends Activity {
             if(Build.VERSION.SDK_INT>=33) d=i.getParcelableExtra(UsbManager.EXTRA_DEVICE,UsbDevice.class);
             else d=i.getParcelableExtra(UsbManager.EXTRA_DEVICE);
             if(UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)){
-                if(isS4(d)){log("S4 MK2 disconnected");stopCapture();closeConnection();device=null;updateStatus();}
+                if(isS4(d)){usbPermissionPending=false;s4ConnectionStatus="";log("S4 MK2 disconnected");stopCapture();closeConnection();device=null;updateStatus();}
                 return;
             }
             if(UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)){
@@ -146,9 +150,10 @@ public class MainActivity extends Activity {
                 return;
             }
             if(!ACTION_USB_PERMISSION.equals(action))return;
+            usbPermissionPending=false;
             boolean granted=i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED,false);
             if(granted&&isS4(d)){device=d;log("USB permission granted");openAndStart();updateStatus();}
-            else log("USB permission denied");
+            else {s4ConnectionStatus="USB access denied · tap Reconnect to retry";log(s4ConnectionStatus);updateStatus();}
         }
     };
 
@@ -188,8 +193,10 @@ public class MainActivity extends Activity {
     private void buildHome(){
         buildHeader("S4Bridge");
         LinearLayout connection=card(); status=text("",16,TEXT); status.setTypeface(Typeface.DEFAULT,Typeface.BOLD); connection.addView(status); TextView usb=text("USB controller status · tap to rescan",12,MUTED); connection.addView(usb); connection.setOnClickListener(new View.OnClickListener(){public void onClick(View v){scan();}}); content.addView(connection,lpCard());
-        TextView controller=text("  DECK A          MIXER          DECK B  \n\n       ◉       ▥ ▥ ▥       ◉       \n\n PLAY  CUE       ║       CUE  PLAY",16,CYAN); controller.setGravity(Gravity.CENTER); controller.setTypeface(Typeface.MONOSPACE); controller.setBackground(shape(CARD,BORDER,12)); controller.setPadding(dp(8),dp(22),dp(8),dp(22)); content.addView(controller,new LinearLayout.LayoutParams(-1,dp(170)));
-        LinearLayout facts=card(); facts.addView(text("VID:PID  17cc:1310                         HID mode",13,MUTED)); facts.addView(text("● S4 MK2                         Interface ID 4 · IN 0x84",12,GREEN)); content.addView(facts,lpCard());
+        content.addView(text("Drag a jog wheel to scrub · drag a waveform to seek",12,MUTED),lpCard());
+        addDeckSurface(deckA,cueA,BLUE);addDeckSurface(deckB,cueB,CYAN);
+
+        LinearLayout facts=card(); facts.addView(text("VID:PID  17cc:1310                         HID mode",13,MUTED)); facts.addView(text("S4 profile                         Interface ID 4 · IN 0x84",12,GREEN)); content.addView(facts,lpCard());
         addAction(content,captureRunning?"■  Stop Capture":"⌁  Start Capture",captureRunning?RED:BLUE,new View.OnClickListener(){public void onClick(View v){if(captureRunning)stopCapture();else openAndStart();showScreen(0);}});
         LinearLayout actions=row(); addSmallAction(actions,"＋ Add tracks",new View.OnClickListener(){public void onClick(View v){pickTracks();}}); addSmallAction(actions,"↻ Reconnect",new View.OnClickListener(){public void onClick(View v){openAndStart();}}); content.addView(actions,lpCard());
         LinearLayout libraryCard=card(); libraryCard.addView(text("TRACK LIBRARY",12,MUTED)); libraryCard.addView(text(library.getSelected()==null?"No track selected":library.getSelected().getName(),16,TEXT));
@@ -198,6 +205,17 @@ public class MainActivity extends Activity {
         logView=text("",10,MUTED); logView.setVisibility(View.GONE); logScroll=new ScrollView(this); logScroll.addView(logView); content.addView(logScroll,new LinearLayout.LayoutParams(1,1));
     }
 
+    private void addDeckSurface(final DeckEngine deck,final CueController cue,int accent){
+        LinearLayout panel=card();
+        DeckSurface surface=new DeckSurface(this,deck,accent);panel.addView(surface,new LinearLayout.LayoutParams(-1,dp(240)));
+        LinearLayout transport=row();
+        addSmallAction(transport,"Play / Pause "+deck.getName(),new View.OnClickListener(){public void onClick(View v){deck.togglePlay();updateStatus();}});
+        Button cueButton=compactButton("Hold CUE",CARD);
+        cueButton.setOnTouchListener(new View.OnTouchListener(){public boolean onTouch(View v,android.view.MotionEvent e){
+            if(e.getActionMasked()==android.view.MotionEvent.ACTION_DOWN){v.getParent().requestDisallowInterceptTouchEvent(true);cue.onPress();return true;}
+            if(e.getActionMasked()==android.view.MotionEvent.ACTION_UP||e.getActionMasked()==android.view.MotionEvent.ACTION_CANCEL){cue.onRelease();v.getParent().requestDisallowInterceptTouchEvent(false);return true;}return true;
+        }});transport.addView(cueButton,new LinearLayout.LayoutParams(0,dp(48),1f));panel.addView(transport);content.addView(panel,lpCard());
+    }
     private void buildCapture(){
         buildHeader("Capture"); LinearLayout live=card(); captureSummary=text("",16,captureRunning?GREEN:MUTED); live.addView(captureSummary); content.addView(live,lpCard());
         LinearLayout filters=row(); String[] names={"All","Buttons","Faders","Jog","Knobs","Other"}; for(int i=0;i<names.length;i++){final String name=names[i]; Button b=compactButton(name,name.equals(captureFilter)?BLUE:CARD); b.setOnClickListener(new View.OnClickListener(){public void onClick(View v){captureFilter=name;buildCaptureEvents();}}); filters.addView(b,new LinearLayout.LayoutParams(0,dp(44),1f));} content.addView(filters);
@@ -216,7 +234,14 @@ public class MainActivity extends Activity {
     private void buildMidi(){
         buildHeader("XP2 MIDI");
         LinearLayout state=card(); xp2StatusView=text(xp2Status,16,CYAN); state.addView(xp2StatusView); content.addView(state,lpCard());
-        addAction(content,"Rescan XP2",BLUE,new View.OnClickListener(){public void onClick(View v){if(xp2!=null)xp2.scan();}});
+        addAction(content,"Rescan XP2",BLUE,new View.OnClickListener(){public void onClick(View v){if(xp2!=null)xp2.scan();showScreen(3);}});
+        if(xp2!=null){
+            LinearLayout devices=card();devices.addView(text(xp2.diagnostics(),13,MUTED));content.addView(devices,lpCard());
+            for(final UsbDevice d:xp2.usbDevices()){
+                if(!isS4(d)&&com.s4bridge.app.hardware.DirectUsbMidiDevice.eligible(d))
+                    addAction(content,"Connect USB · "+com.s4bridge.app.hardware.DirectUsbMidiDevice.label(d),BLUE,new View.OnClickListener(){public void onClick(View v){xp2.connectUsb(d);}});
+            }
+        }
         LinearLayout audio=card();
         addPerformanceSwitch(audio); content.addView(audio,lpCard());
         content.addView(text("BPM is manual. Set the first beat in Transport mode before syncing. Tempo changes also change pitch.",13,MUTED),lpCard());
@@ -247,7 +272,7 @@ public class MainActivity extends Activity {
             try{String[] parts=saved.split(":");if(parts.length==2)xp2Router.bind(Integer.parseInt(parts[0]),Integer.parseInt(parts[1]),action);}catch(IllegalArgumentException ignored){}
         }
         xp2=new Xp2MidiDevice(this,new Xp2MidiDevice.Listener(){
-            public void onStatus(String value){xp2Status=value;if(xp2StatusView!=null)xp2StatusView.setText(value);}
+            public void onStatus(String value){xp2Status=value;if(xp2StatusView!=null)xp2StatusView.setText(value);updateStatus();}
             public void onDisconnected(){xp2Router.releaseAll();xp2Router.cancelLearn();if(xp2Mapping!=null)xp2Mapping.reset();updateXp2Learn();}
             public void onMessage(int port,int status,int data1,int data2){
                 // Ports are distinct streams. Mapping uses only the primary XP2 output port.
@@ -323,9 +348,10 @@ public class MainActivity extends Activity {
                 int limit=(int)Math.min(96L*1024*1024,Runtime.getRuntime().maxMemory()/8);
                 if(target>=2)limit=(int)Math.min(192000L*4*15,Runtime.getRuntime().maxMemory()/64);
                 final PcmClip clip=PcmDecoder.decode(app,Uri.parse(track.getReference()),limit,target>=2);
+                final float[] peaks=target<2?clip.waveform(768):null;
                 runOnUiThread(new Runnable(){public void run(){
                     if(destroyed||token!=loadGeneration[target]||!deckA.isPerformanceEnabled())return;
-                    if(target<2){DeckEngine deck=target==0?deckA:deckB;CueController cue=target==0?cueA:cueB;deck.loadPcm(clip,track.getReference());cue.onTrackLoaded();performanceController.trackLoaded(target);}
+                    if(target<2){DeckEngine deck=target==0?deckA:deckB;CueController cue=target==0?cueA:cueB;deck.loadPcm(clip,track.getReference());deck.setWaveform(peaks,"");cue.onTrackLoaded();performanceController.trackLoaded(target);}
                     else samples[target-2].load(clip);
                     if(audioOutput!=null&&!audioOutput.isRunning())audioOutput.start();
                     if(xp2!=null)xp2.invalidateLeds();updateStatus();
@@ -424,16 +450,20 @@ public class MainActivity extends Activity {
 
     private void requestUsbPermission(){
         if(device==null)scan(); if(device==null)return;
-        if(usbManager.hasPermission(device)){log("USB permission already granted");return;}
+        if(usbManager.hasPermission(device)||usbPermissionPending)return;
+        usbPermissionPending=true;s4ConnectionStatus="Allow Android USB access to connect";updateStatus();
         Intent i=new Intent(ACTION_USB_PERMISSION).setPackage(getPackageName());
         PendingIntent pi=PendingIntent.getBroadcast(this,0,i,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_MUTABLE);
-        usbManager.requestPermission(device,pi); log("USB permission requested");
+        try{usbManager.requestPermission(device,pi);log("USB permission requested");}
+        catch(RuntimeException e){usbPermissionPending=false;s4ConnectionStatus="USB permission request failed: "+e.getMessage();updateStatus();}
     }
 
     private void openAndStart(){
         stopCapture(); closeConnection(); if(device==null)scan();
-        if(device==null||!usbManager.hasPermission(device)){log("S4/permission unavailable");return;}
-        connection=usbManager.openDevice(device); if(connection==null){log("openDevice failed");return;}
+        if(device==null){updateStatus();return;}
+        if(!usbManager.hasPermission(device)){requestUsbPermission();return;}
+        s4ConnectionStatus="";
+        connection=usbManager.openDevice(device); if(connection==null){s4ConnectionStatus="USB open failed · reconnect and retry";log(s4ConnectionStatus);updateStatus();return;}
         for(int x=0;x<device.getInterfaceCount();x++){
             UsbInterface in=device.getInterface(x); if(in.getInterfaceClass()!=UsbConstants.USB_CLASS_HID)continue;
             for(int e=0;e<in.getEndpointCount();e++){
@@ -441,9 +471,9 @@ public class MainActivity extends Activity {
                 if(ep.getAddress()==0x84&&ep.getDirection()==UsbConstants.USB_DIR_IN&&ep.getType()==UsbConstants.USB_ENDPOINT_XFER_INT){hidInterface=in;inEndpoint=ep;}
             }
         }
-        if(hidInterface==null||inEndpoint==null){log("HID endpoint 0x84 not found");closeConnection();return;}
+        if(hidInterface==null||inEndpoint==null){s4ConnectionStatus="S4 HID endpoint 0x84 not found";log(s4ConnectionStatus);closeConnection();updateStatus();return;}
         boolean claimed=connection.claimInterface(hidInterface,true); log("HID interface id="+hidInterface.getId()+" claim="+claimed);
-        if(!claimed){closeConnection();return;} startCapture();
+        if(!claimed){s4ConnectionStatus="Cannot claim S4 interface · close other USB apps";closeConnection();updateStatus();return;} startCapture();
     }
 
     private void startCapture(){
@@ -530,12 +560,24 @@ public class MainActivity extends Activity {
         Uri uri=Uri.parse(track.getReference());
         if(deck.isPerformanceEnabled()){decodeTrack(deck==deckA?0:1,track);return;}
         boolean loaded=deck.loadUri(this,uri);
-        if(loaded)cue.onTrackLoaded();
+        if(loaded){cue.onTrackLoaded();analyzeWaveform(deck,uri);}else deck.setWaveform(null,"Track load failed");
         mixer.setCrossfader(mixer.getCrossfader());
         log("DECK "+deck.getName()+" load="+loaded+" track="+track.getName());
         updateStatus();
     }
 
+    private void analyzeWaveform(final DeckEngine deck,final Uri uri){
+        final int target=deck==deckA?0:1,token=++loadGeneration[target];
+        if(loads[target]!=null)loads[target].cancel(true);decoder.purge();deck.setWaveform(null,"Analyzing waveform…");
+        final Context app=getApplicationContext();
+        try{loads[target]=decoder.submit(new Runnable(){public void run(){
+            try{
+                int limit=(int)Math.min(96L*1024*1024,Runtime.getRuntime().maxMemory()/8);
+                final float[] peaks=PcmDecoder.decode(app,uri,limit,false).waveform(768);
+                runOnUiThread(new Runnable(){public void run(){if(!destroyed&&token==loadGeneration[target])deck.setWaveform(peaks,"");}});
+            }catch(Exception e){runOnUiThread(new Runnable(){public void run(){if(!destroyed&&token==loadGeneration[target])deck.setWaveform(null,"Waveform unavailable · track too large or unsupported");}});}
+        }});}catch(RejectedExecutionException e){deck.setWaveform(null,"Waveform queue busy · reload to retry");}
+    }
     private String displayName(Uri uri){
         Cursor cursor=null;
         try{
@@ -548,7 +590,7 @@ public class MainActivity extends Activity {
     private void updateStatus(){
         runOnUiThread(new Runnable(){public void run(){
             TrackLibrary.Track selected=library.getSelected();
-            if(status!=null)status.setText("♧  Traktor Kontrol S4 MK2\n"+(device==null?"Not connected · tap to scan":(captureRunning?"Connected · Capturing":"Connected · Ready"))+"\n\nA "+(deckA.isPlaying()?"PLAYING":(deckA.isLoaded()?"READY":"EMPTY"))+"  ·  B "+(deckB.isPlaying()?"PLAYING":(deckB.isLoaded()?"READY":"EMPTY"))+"  ·  Library "+library.getTracks().size());
+            if(status!=null)status.setText("♧  Traktor Kontrol S4 MK2\n"+(device==null?"Not detected by Android":(captureRunning?"Connected · Capturing":(!s4ConnectionStatus.isEmpty()?s4ConnectionStatus:(!usbManager.hasPermission(device)?"USB access needed · tap Reconnect":"Detected · tap Start"))))+"\n\nXP2: "+xp2Status+"\n\nA "+(deckA.isPlaying()?"PLAYING":(deckA.isLoaded()?"READY":"EMPTY"))+"  ·  B "+(deckB.isPlaying()?"PLAYING":(deckB.isLoaded()?"READY":"EMPTY"))+"  ·  Library "+library.getTracks().size());
             updateCaptureSummary();
         }});
     }
