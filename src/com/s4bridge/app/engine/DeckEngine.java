@@ -5,13 +5,23 @@ import android.media.MediaPlayer;
 import android.net.Uri;
 
 import com.s4bridge.app.core.Playback;
+import com.s4bridge.app.core.PerformanceDeck;
+import com.s4bridge.app.core.PcmClip;
 
 public class DeckEngine implements Playback {
     private final String name;
+    private final PerformanceDeck performance=new PerformanceDeck();
+    private volatile boolean performanceEnabled;
     private MediaPlayer player;
     private String loadedPath;
-    private float channelVolume = 1.0f;
-    private float crossfaderGain = 1.0f;
+    private float[] waveform;
+    private String waveformStatus="Load a track";
+    public float[] getWaveform(){return waveform;}
+    public String getWaveformStatus(){return waveformStatus;}
+    public void setWaveform(float[] value,String status){waveform=value;waveformStatus=status;}
+    public int getDurationMs(){if(performanceEnabled)return performance.getDurationMs();if(player==null)return 0;try{return player.getDuration();}catch(IllegalStateException e){return 0;}}
+    private volatile float channelVolume = 1.0f;
+    private volatile float crossfaderGain = 1.0f;
     private float tempo = 0.0f;
     private float eqLow = 0.5f;
     private float eqMid = 0.5f;
@@ -56,26 +66,37 @@ public class DeckEngine implements Playback {
         }
     }
 
+    public PerformanceDeck getPerformance() { return performance; }
+    public boolean isPerformanceEnabled() { return performanceEnabled; }
+    public void setPerformanceEnabled(boolean enabled) {
+        if(performanceEnabled==enabled)return;
+        releasePlayer();performance.load(null);loadedPath=null;setWaveform(null,"Load a track");performanceEnabled=enabled;
+    }
+    public void loadPcm(PcmClip clip,String reference) { releasePlayer();performance.load(clip);loadedPath=reference; }
     public String getName() { return name; }
-    public boolean isLoaded() { return player != null; }
+    public boolean isLoaded() { return performanceEnabled?performance.isLoaded():player != null; }
     public String getLoadedPath() { return loadedPath; }
 
     public boolean isPlaying() {
+        if(performanceEnabled) { return performance.isPlaying(); }
         if (player == null) return false;
         try { return player.isPlaying(); } catch (IllegalStateException e) { return false; }
     }
 
     public void play() {
+        if(performanceEnabled) { performance.play(); return; }
         if (player == null) return;
         try { player.start(); } catch (IllegalStateException ignored) {}
     }
 
     public void pause() {
+        if(performanceEnabled) { performance.pause(); return; }
         if (player == null) return;
         try { if (player.isPlaying()) player.pause(); } catch (IllegalStateException ignored) {}
     }
 
     public void togglePlay() {
+        if(performanceEnabled) { performance.togglePlay(); return; }
         if (player == null) return;
         try {
             if (player.isPlaying()) player.pause(); else player.start();
@@ -83,11 +104,13 @@ public class DeckEngine implements Playback {
     }
 
     public int getPositionMs() {
+        if(performanceEnabled) { return performance.getPositionMs(); }
         if (player == null) return 0;
         try { return player.getCurrentPosition(); } catch (IllegalStateException e) { return 0; }
     }
 
     public void seekToMs(int positionMs) {
+        if(performanceEnabled) { performance.seekToMs(positionMs); return; }
         if (player == null) return;
         try { player.seekTo(Math.max(0, positionMs)); } catch (IllegalStateException ignored) {}
     }
@@ -103,7 +126,7 @@ public class DeckEngine implements Playback {
         try { player.setVolume(outputGain, outputGain); } catch (IllegalStateException ignored) {}
     }
 
-    public void setTempo(float normalized) { tempo = (clamp(normalized) - 0.5f) * 2.0f; }
+    public void setTempo(float normalized) { tempo = (clamp(normalized) - 0.5f) * 2.0f; performance.setRate(1+tempo*0.08); }
     public float getTempo() { return tempo; }
     public void setEqLow(float value) { eqLow = clamp(value); }
     public float getEqLow() { return eqLow; }
@@ -115,9 +138,9 @@ public class DeckEngine implements Playback {
     public float getFilter() { return filter; }
     public void setJogTouched(boolean touched) { jogTouched = touched; }
     public boolean isJogTouched() { return jogTouched; }
-    public void jog(int delta) { /* Native audio engine milestone. */ }
+    public void jog(int delta) { if(isLoaded())seekToMs((int)Math.max(0,Math.min((long)getDurationMs(),(long)getPositionMs()+delta*10L))); }
 
-    public void release() { releasePlayer(); loadedPath = null; }
+    public void release() { releasePlayer(); performance.load(null); loadedPath = null; }
 
     private void releasePlayer() {
         if (player != null) {

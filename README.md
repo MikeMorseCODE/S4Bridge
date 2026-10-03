@@ -48,6 +48,10 @@ Run all platform-independent behavior and HID parser checks without Gradle or an
 ./test-jvm
 ```
 
+## DDJ-XP2 expansion
+
+The **MIDI** tab supports independent XP2 input, factory pad-bank decoding, changed-state LED output, a live monitor, and saved note learning. Enable **Performance audio** there and reload tracks for 16 hot cues per deck, auto loops/rolls, saved loops, eight shared sampler slots, transport/grid controls and filter/echo/tremolo FX. BPM/grid setup is manual, and rate changes also change pitch. The original MediaPlayer path remains the default. See [XP2 setup, mapping and limits](docs/XP2-MIDI.md). Hardware validation is pending.
+
 ## Attribution
 
 The S4 MK2 HID mapping was ported from the open-source Mixxx controller mapping. This project is intended to remain GPL-2.0-or-later compatible.
