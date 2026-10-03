@@ -39,6 +39,8 @@ import com.s4bridge.app.core.CueController;
 import com.s4bridge.app.core.ControllerRouter;
 import com.s4bridge.app.core.TrackLibrary;
 import com.s4bridge.app.hardware.S4Mk2Mapping;
+import com.s4bridge.app.hardware.Xp2MidiInput;
+import com.s4bridge.app.core.Xp2Mapping;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -85,6 +87,35 @@ public class MainActivity extends Activity {
         public void jog(boolean isDeckA,int delta){if(isDeckA)deckA.jog(delta);else deckB.jog(delta);}
     });
     private S4Mk2Mapping mapping;
+    private Xp2MidiInput xp2Input;
+    private String xp2Status="XP2 MIDI starting";
+    private final int[][] hotCues=new int[2][8];
+    private final boolean[] xp2Muted=new boolean[2];
+    private final float[] xp2SavedVolume={1f,1f};
+    private void startXp2(){
+        for(int[] cues:hotCues)Arrays.fill(cues,-1);
+        final Xp2Mapping xp2=new Xp2Mapping(new Xp2Mapping.Listener(){
+            public void onAction(final String action,final int deck,final int slot,final boolean pressed){
+                runOnUiThread(new Runnable(){public void run(){handleXp2(action,deck,slot,pressed);}});
+            }
+        });
+        xp2Input=new Xp2MidiInput(this,new Xp2MidiInput.Listener(){
+            public void onBytes(byte[] bytes,int offset,int count){xp2.receive(bytes,offset,count);}
+            public void onStatus(String value){xp2Status=value;if(currentScreen==3)showScreen(3);}
+        });
+    }
+    private void handleXp2(String action,int deck,int slot,boolean pressed){
+        if(deck<0||deck>1)return;
+        DeckEngine target=deck==0?deckA:deckB;
+        if("load_track".equals(action)){if(pressed)loadSelected(target,deck==0?cueA:cueB);}
+        else if("cue_point".equals(action)&&slot>=0&&slot<8){
+            if(pressed&&target.isLoaded()){if(hotCues[deck][slot]<0)hotCues[deck][slot]=target.getPositionMs();else target.seekToMs(hotCues[deck][slot]);}
+        }else if("mute".equals(action)){
+            if(pressed){if(!xp2Muted[deck]){xp2SavedVolume[deck]=target.getChannelVolume();target.setChannelVolume(0f);}else target.setChannelVolume(xp2SavedVolume[deck]);xp2Muted[deck]=!xp2Muted[deck];}
+        }else if(pressed)log("XP2 unsupported engine action: "+action);
+        recordEvent("XP2 "+action+" deck="+deck+" slot="+slot,pressed?"PRESS":"RELEASE","button",true);
+        updateStatus();
+    }
 
     private final BroadcastReceiver usbReceiver=new BroadcastReceiver(){
         @Override public void onReceive(Context c,Intent i){
@@ -111,7 +142,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         usbManager=(UsbManager)getSystemService(Context.USB_SERVICE);
         if(getSharedPreferences("ui_settings",MODE_PRIVATE).getBoolean("keep_screen",false))getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        buildUi(); restoreLibrary(); registerUsb(); createMapping(); scan(); updateStatus();
+        buildUi(); restoreLibrary(); registerUsb(); createMapping(); startXp2(); scan(); updateStatus();
     }
 
     private void buildUi(){
@@ -168,7 +199,13 @@ public class MainActivity extends Activity {
 
     private void mappingGroup(String title,String[][] rows){content.addView(text(title,12,MUTED));LinearLayout group=card();for(int i=0;i<rows.length;i++){TextView r=text(rows[i][0]+"\n     "+rows[i][1]+"   ·   "+rows[i][2]+"   ›",14,i==rows.length-1?CYAN:TEXT);r.setPadding(dp(4),dp(10),dp(4),dp(10));group.addView(r);}content.addView(group,lpCard());}
 
-    private void buildMidi(){buildHeader("MIDI Router");TextView preview=text("FEATURE PREVIEW · MIDI OUTPUT IS NOT ACTIVE",12,ORANGE);preview.setGravity(Gravity.CENTER);content.addView(preview,lpCard());LinearLayout modes=row();modes.addView(compactButton("USB HID → MIDI · Future",CARD),new LinearLayout.LayoutParams(0,dp(48),1f));modes.addView(compactButton("USB HID → Direct App",BLUE),new LinearLayout.LayoutParams(0,dp(48),1f));content.addView(modes);LinearLayout flow=card();flow.addView(text("S4 MK2     →     S4Bridge     →     Deck engine",17,CYAN));flow.addView(text("HID input          semantic mapping          MediaPlayer",12,MUTED));content.addView(flow,lpCard());LinearLayout future=card();future.addView(text("MIDI routing",18,TEXT));future.addView(text("Virtual MIDI output, pass-through, ports, formats and velocity curves are planned. No MIDI data is currently emitted.",14,MUTED));content.addView(future,lpCard());}
+    private void buildMidi(){
+        buildHeader("XP2 MIDI Input");LinearLayout info=card();info.addView(text(xp2Status,16,CYAN));
+        info.addView(text("DDJ XP2 V9 · imported MIDI mapping",14,TEXT));
+        info.addView(text("Active: load selected track, 8 hot cues per deck, mute. First cue press stores the current position; later presses jump to it. Cues reset when loading a track.",14,MUTED));
+        info.addView(text("Loops, pitch bend, FX and LED feedback need additional engine/output support. MIDI output is not active.",14,ORANGE));content.addView(info,lpCard());
+        addAction(content,"Reconnect XP2",BLUE,new View.OnClickListener(){public void onClick(View v){if(xp2Input!=null)xp2Input.reconnect();}});
+    }
 
     private void buildSettings(){buildHeader("Settings");final SharedPreferences prefs=getSharedPreferences("ui_settings",MODE_PRIVATE);content.addView(text("DEVICE",12,MUTED));LinearLayout deviceCard=card();addSwitch(deviceCard,"Auto reconnect","Reconnect on USB reattach",prefs.getBoolean("auto_reconnect",true),"auto_reconnect");addSwitch(deviceCard,"Request USB permission","Ask automatically when connected",prefs.getBoolean("auto_permission",true),"auto_permission");addDisabledSwitch(deviceCard,"LED feedback","Future · output reports not implemented");addSwitch(deviceCard,"Keep screen on","Prevent sleep while performing",prefs.getBoolean("keep_screen",false),"keep_screen");content.addView(deviceCard,lpCard());content.addView(text("APP",12,MUTED));LinearLayout app=card();app.addView(text("Theme                                      Dark",14,TEXT));app.addView(text("Log level                                  Info",14,TEXT));app.addView(text("HID display                         Coalesced",14,TEXT));TextView clear=text("Clear capture events                                  ›",14,TEXT);clear.setPadding(0,dp(14),0,dp(8));clear.setOnClickListener(new View.OnClickListener(){public void onClick(View v){recentEvents.clear();eventCount=0;}});app.addView(clear);content.addView(app,lpCard());content.addView(text("ABOUT",12,MUTED));LinearLayout about=card();about.addView(text("S4Bridge v0.1.0",16,TEXT));about.addView(text("Traktor Kontrol S4 MK2 on Android",13,MUTED));about.addView(text("GPL-2.0-or-later · Mapping attribution: Mixxx",13,BLUE));content.addView(about,lpCard());}
 
@@ -351,7 +388,7 @@ public class MainActivity extends Activity {
         if(track==null){log("LIBRARY empty; add tracks first");return;}
         Uri uri=Uri.parse(track.getReference());
         boolean loaded=deck.loadUri(this,uri);
-        if(loaded)cue.onTrackLoaded();
+        if(loaded){cue.onTrackLoaded();Arrays.fill(hotCues[deck==deckA?0:1],-1);}
         mixer.setCrossfader(mixer.getCrossfader());
         log("DECK "+deck.getName()+" load="+loaded+" track="+track.getName());
         updateStatus();
@@ -383,5 +420,5 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume(){super.onResume();if(device==null)scan();if(device!=null&&usbManager.hasPermission(device)&&!captureRunning&&getSharedPreferences("ui_settings",MODE_PRIVATE).getBoolean("auto_reconnect",true))openAndStart();}
 
-    @Override protected void onDestroy(){stopCapture();closeConnection();deckA.release();deckB.release();try{unregisterReceiver(usbReceiver);}catch(Exception ignored){}super.onDestroy();}
+    @Override protected void onDestroy(){if(xp2Input!=null)xp2Input.close();stopCapture();closeConnection();deckA.release();deckB.release();try{unregisterReceiver(usbReceiver);}catch(Exception ignored){}super.onDestroy();}
 }

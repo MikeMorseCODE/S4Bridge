@@ -51,3 +51,9 @@ Run all platform-independent behavior and HID parser checks without Gradle or an
 ## Attribution
 
 The S4 MK2 HID mapping was ported from the open-source Mixxx controller mapping. This project is intended to remain GPL-2.0-or-later compatible.
+
+## Pioneer DDJ-XP2 MIDI input
+
+Connect the XP2 through USB host (a powered hub may be needed). Android MIDI handles enumeration separately from the existing S4 HID capture. Open the MIDI tab to see XP2 status or reconnect. The imported `docs/mappings/DDJ_XP2_V9.xml` is preserved verbatim; wire channels are converted from XML 1..16 to 0..15.
+
+The current engine supports the mapping's track-load buttons, eight hot cues per deck, and mute. A first hot-cue press stores the current track position; subsequent presses seek there. Loading a track clears that deck's cues. Loop, FX, pitch-bend and external-plugin actions are not implemented; LED feedback is retained in the source XML but is not transmitted. This does not add physical jog wheels or waveform rendering.

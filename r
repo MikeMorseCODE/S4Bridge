@@ -21,6 +21,8 @@ src/com/s4bridge/app/core/Playback.java \
 src/com/s4bridge/app/core/CueController.java \
 src/com/s4bridge/app/core/ControllerRouter.java \
 src/com/s4bridge/app/core/TrackLibrary.java \
+src/com/s4bridge/app/core/Xp2Mapping.java \
+src/com/s4bridge/app/hardware/Xp2MidiInput.java \
 src/com/s4bridge/app/engine/DeckEngine.java \
 src/com/s4bridge/app/engine/MixerEngine.java \
 src/com/s4bridge/app/hardware/S4Mk2Mapping.java \

@@ -13,3 +13,5 @@ javac -source 8 -target 8 -Xlint:-options -d "$OUT" \
 
 java -cp "$OUT" CoreBehaviorTest
 java -cp "$OUT" S4Mk2MappingTest
+
+java -cp "$OUT" Xp2MappingTest
