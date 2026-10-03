@@ -20,6 +20,10 @@ import android.os.Bundle;
 import android.net.Uri;
 import android.provider.OpenableColumns;
 import android.graphics.Color;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.os.Handler;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.SystemClock;
@@ -67,15 +71,34 @@ public class MainActivity extends Activity {
     private final Button[] playButtons=new Button[2];
     private final SeekBar[] volumeSliders=new SeekBar[2];
     private SeekBar crossfaderSlider;
+    private final PlatterView[] platters=new PlatterView[2];
+    private final Handler performanceHandler=new Handler();
+    private final Runnable performanceTick=new Runnable(){public void run(){refreshPerformance();performanceHandler.postDelayed(this,200);}};
+    private final class PlatterView extends View {
+        private final DeckEngine deck;private final int accent;private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+        PlatterView(DeckEngine deck,int accent){super(MainActivity.this);this.deck=deck;this.accent=accent;setContentDescription("Deck "+deck.getName()+" playback position");}
+        @Override protected void onDraw(Canvas canvas){
+            float x=getWidth()/2f,y=getHeight()/2f,r=Math.min(getWidth(),getHeight())*.42f;
+            paint.setStyle(Paint.Style.FILL);paint.setColor(Color.rgb(12,12,14));canvas.drawCircle(x,y,r,paint);
+            paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2));paint.setColor(BORDER);canvas.drawCircle(x,y,r,paint);canvas.drawCircle(x,y,r*.82f,paint);
+            int duration=deck.getDurationMs();float progress=duration>0?Math.min(1f,deck.getPositionMs()/(float)duration):0f;
+            paint.setColor(accent);paint.setStrokeWidth(dp(4));canvas.drawArc(new RectF(x-r,y-r,x+r,y+r),-90,progress*360,false,paint);
+            double angle=deck.getPositionMs()/1800.0*Math.PI*2-Math.PI/2;paint.setStrokeWidth(dp(2));canvas.drawLine(x+(float)Math.cos(angle)*r*.62f,y+(float)Math.sin(angle)*r*.62f,x+(float)Math.cos(angle)*r*.78f,y+(float)Math.sin(angle)*r*.78f,paint);
+            paint.setStyle(Paint.Style.FILL);paint.setTextAlign(Paint.Align.CENTER);paint.setTypeface(Typeface.DEFAULT_BOLD);paint.setTextSize(dp(22));canvas.drawText(deck.getName(),x,y-dp(4),paint);
+            paint.setTypeface(Typeface.MONOSPACE);paint.setTextSize(dp(12));paint.setColor(TEXT);canvas.drawText(clock(deck.getPositionMs()),x,y+dp(19),paint);
+        }
+    }
+    private String clock(int ms){return String.format(Locale.US,"%02d:%02d",ms/60000,(ms/1000)%60);}
+
     private ScrollView logScroll;
     private LinearLayout content, bottomNav, captureEvents;
     private int currentScreen, eventCount, currentReportId, currentReportSize;
     private long captureStartedAt, lastContinuousUi;
     private String captureFilter="All";
     private final ArrayList<CaptureEvent> recentEvents=new ArrayList<CaptureEvent>();
-    private static final int BG=Color.rgb(5,13,21), CARD=Color.rgb(12,25,36), BORDER=Color.rgb(39,61,78);
+    private static final int BG=Color.rgb(15,15,17), CARD=Color.rgb(26,26,29), BORDER=Color.rgb(58,58,63);
     private static final int TEXT=Color.rgb(235,243,251), MUTED=Color.rgb(150,170,190), BLUE=Color.rgb(35,132,255);
-    private static final int GREEN=Color.rgb(25,224,139), CYAN=Color.rgb(18,205,221), ORANGE=Color.rgb(255,154,26), RED=Color.rgb(255,67,91);
+    private static final int GREEN=Color.rgb(95,204,113), CYAN=Color.rgb(51,167,255), ORANGE=Color.rgb(255,92,88), RED=Color.rgb(255,67,91);
 
     private static final class CaptureEvent{
         final long time; final String name,value,type; final int report,size;
@@ -178,29 +201,31 @@ public class MainActivity extends Activity {
     }
 
     private void buildHome(){
-        buildHeader("S4Bridge");content.addView(text("PERFORMANCE",12,MUTED));
+        buildHeader("S4Bridge");
         LinearLayout connections=card();status=text("",14,TEXT);connections.addView(status);
         xp2HomeStatus=text(xp2Status,13,CYAN);connections.addView(xp2HomeStatus);content.addView(connections,lpCard());
         LinearLayout reconnect=row();addSmallAction(reconnect,"Connect S4",new View.OnClickListener(){public void onClick(View v){scan();if(device!=null&&!usbManager.hasPermission(device))requestUsbPermission();else openAndStart();}});
         addSmallAction(reconnect,"Connect XP2",new View.OnClickListener(){public void onClick(View v){if(xp2Input!=null)xp2Input.reconnect();}});content.addView(reconnect,lpCard());
         LinearLayout decks=new LinearLayout(this);
-        boolean wide=getResources().getConfiguration().screenWidthDp>=600;decks.setOrientation(wide?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);
+        boolean wide=true;decks.setOrientation(wide?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);
         for(int i=0;i<2;i++){LinearLayout panel=buildDeck(i);LinearLayout.LayoutParams params=wide?new LinearLayout.LayoutParams(0,-2,1f):new LinearLayout.LayoutParams(-1,-2);params.setMargins(dp(3),dp(6),dp(3),dp(6));decks.addView(panel,params);}content.addView(decks);
-        LinearLayout mix=card();mix.addView(text("MASTER MIX",12,MUTED));mix.addView(text("Deck A                         CROSSFADER                         Deck B",12,TEXT));
+        LinearLayout mix=card();mix.addView(text("A                         MIX                         B",12,MUTED));
         crossfaderSlider=new SeekBar(this);crossfaderSlider.setMax(1000);crossfaderSlider.setProgress((int)(mixer.getCrossfader()*1000));
         crossfaderSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar bar,int value,boolean user){if(user)mixer.setCrossfader(value/1000f);}public void onStartTrackingTouch(SeekBar bar){}public void onStopTrackingTouch(SeekBar bar){}});
         mix.addView(crossfaderSlider,new LinearLayout.LayoutParams(-1,dp(52)));content.addView(mix,lpCard());
-        LinearLayout tracks=card();LinearLayout heading=row();heading.addView(text("TRACK LIBRARY",12,MUTED),new LinearLayout.LayoutParams(0,dp(48),1f));addSmallAction(heading,"＋ Add music",new View.OnClickListener(){public void onClick(View v){pickTracks();}});tracks.addView(heading);
+        LinearLayout tracks=card();LinearLayout heading=row();heading.addView(text("LIBRARY  /  ALL TRACKS",12,MUTED),new LinearLayout.LayoutParams(0,dp(48),1f));addSmallAction(heading,"＋ Add music",new View.OnClickListener(){public void onClick(View v){pickTracks();}});tracks.addView(heading);
+        tracks.addView(text("#     TITLE",11,MUTED));
         if(library.getTracks().isEmpty())tracks.addView(text("Add audio files, select a track, then load a deck.",14,TEXT));
         else for(int i=0;i<library.getTracks().size();i++){
-            final int index=i;TextView item=text((i==library.getSelectedIndex()?"●  ":"    ")+library.getTracks().get(i).getName(),16,i==library.getSelectedIndex()?CYAN:TEXT);item.setPadding(dp(4),dp(16),dp(4),dp(16));item.setOnClickListener(new View.OnClickListener(){public void onClick(View v){library.moveSelection(index-library.getSelectedIndex());showScreen(0);}});tracks.addView(item);
+            final int index=i;TextView item=text(String.format(Locale.US,"%02d   ",i+1)+library.getTracks().get(i).getName(),16,i==library.getSelectedIndex()?CYAN:TEXT);item.setPadding(dp(8),dp(12),dp(8),dp(12));item.setBackgroundColor(i==library.getSelectedIndex()?Color.rgb(41,62,81):i%2==0?Color.rgb(31,31,34):CARD);item.setOnClickListener(new View.OnClickListener(){public void onClick(View v){library.moveSelection(index-library.getSelectedIndex());showScreen(0);}});tracks.addView(item);
         }
         LinearLayout loads=row();addSmallAction(loads,"Load A",new View.OnClickListener(){public void onClick(View v){loadSelected(deckA,cueA);}});addSmallAction(loads,"Load B",new View.OnClickListener(){public void onClick(View v){loadSelected(deckB,cueB);}});tracks.addView(loads);content.addView(tracks,lpCard());
         logView=text("",10,MUTED);logView.setVisibility(View.GONE);logScroll=new ScrollView(this);logScroll.addView(logView);content.addView(logScroll,new LinearLayout.LayoutParams(1,1));
     }
     private LinearLayout buildDeck(final int index){
         final DeckEngine deck=index==0?deckA:deckB;final CueController cue=index==0?cueA:cueB;int accent=index==0?CYAN:ORANGE;
-        LinearLayout panel=card();panel.addView(text("DECK "+deck.getName(),13,accent));deckLabels[index]=text("",18,TEXT);panel.addView(deckLabels[index]);
+        LinearLayout panel=card();panel.addView(text("DECK "+deck.getName(),13,accent));deckLabels[index]=text("",14,TEXT);deckLabels[index].setMaxLines(3);deckLabels[index].setMinHeight(dp(60));panel.addView(deckLabels[index]);
+        platters[index]=new PlatterView(deck,accent);panel.addView(platters[index],new LinearLayout.LayoutParams(-1,dp(145)));
         LinearLayout transport=row();playButtons[index]=compactButton("PLAY",accent);playButtons[index].setTextColor(BG);playButtons[index].setTextSize(16);
         playButtons[index].setOnClickListener(new View.OnClickListener(){public void onClick(View v){deck.togglePlay();updateStatus();}});transport.addView(playButtons[index],new LinearLayout.LayoutParams(0,dp(64),1f));
         Button cueButton=compactButton("CUE",CARD);cueButton.setTextSize(16);cueButton.setOnTouchListener(new View.OnTouchListener(){public boolean onTouch(View v,MotionEvent e){if(e.getAction()==MotionEvent.ACTION_DOWN){cue.onPress();updateStatus();return true;}if(e.getAction()==MotionEvent.ACTION_UP||e.getAction()==MotionEvent.ACTION_CANCEL){cue.onRelease();if(e.getAction()==MotionEvent.ACTION_UP)v.performClick();updateStatus();return true;}return true;}});transport.addView(cueButton,new LinearLayout.LayoutParams(0,dp(64),1f));panel.addView(transport);
@@ -213,7 +238,8 @@ public class MainActivity extends Activity {
         for(int i=0;i<2;i++){
             DeckEngine deck=i==0?deckA:deckB;String title="No track loaded";
             for(TrackLibrary.Track track:library.getTracks())if(track.getReference().equals(deck.getLoadedPath())){title=track.getName();break;}
-            if(deckLabels[i]!=null)deckLabels[i].setText(title+"\n"+(deck.isPlaying()?"PLAYING":deck.isLoaded()?"READY":"EMPTY"));
+            if(deckLabels[i]!=null)deckLabels[i].setText(title+"\n"+(deck.isLoaded()?"−"+clock(Math.max(0,deck.getDurationMs()-deck.getPositionMs())):"EMPTY"));
+            if(platters[i]!=null)platters[i].invalidate();
             if(playButtons[i]!=null){playButtons[i].setText(deck.isPlaying()?"PAUSE":"PLAY");playButtons[i].setEnabled(deck.isLoaded());}
             if(volumeSliders[i]!=null&&!volumeSliders[i].isPressed())volumeSliders[i].setProgress((int)(deck.getChannelVolume()*1000));
         }
@@ -248,11 +274,11 @@ public class MainActivity extends Activity {
     private void addSwitch(LinearLayout parent,String title,String subtitle,boolean checked,final String key){LinearLayout row=row();TextView label=text(title+"\n"+subtitle,14,TEXT);row.addView(label,new LinearLayout.LayoutParams(0,dp(62),1f));Switch toggle=new Switch(this);toggle.setChecked(checked);toggle.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener(){public void onCheckedChanged(CompoundButton b,boolean value){getSharedPreferences("ui_settings",MODE_PRIVATE).edit().putBoolean(key,value).apply();if("keep_screen".equals(key)){if(value)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}}});row.addView(toggle);parent.addView(row);}
     private void addDisabledSwitch(LinearLayout p,String t,String s){LinearLayout row=row();row.addView(text(t+"\n"+s,14,MUTED),new LinearLayout.LayoutParams(0,dp(62),1f));Switch sw=new Switch(this);sw.setEnabled(false);row.addView(sw);p.addView(row);}
     private LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.HORIZONTAL);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
-    private LinearLayout card(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);v.setPadding(dp(14),dp(12),dp(14),dp(12));v.setBackground(shape(CARD,BORDER,12));return v;}
+    private LinearLayout card(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);v.setPadding(dp(10),dp(10),dp(10),dp(10));v.setBackground(shape(CARD,BORDER,3));return v;}
     private LinearLayout.LayoutParams lpCard(){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.setMargins(0,dp(6),0,dp(6));return p;}
     private TextView text(String value,float size,int color){TextView v=new TextView(this);v.setText(value);v.setTextSize(size);v.setTextColor(color);v.setLineSpacing(0,1.12f);return v;}
     private GradientDrawable shape(int fill,int stroke,float radius){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp((int)radius));d.setStroke(dp(1),stroke);return d;}
-    private Button compactButton(String label,int color){Button b=new Button(this);b.setText(label);b.setTextColor(TEXT);b.setTextSize(11);b.setAllCaps(false);b.setPadding(dp(2),0,dp(2),0);b.setBackground(shape(color,BORDER,9));return b;}
+    private Button compactButton(String label,int color){Button b=new Button(this);b.setText(label);b.setTextColor(TEXT);b.setTextSize(11);b.setAllCaps(false);b.setPadding(dp(2),0,dp(2),0);b.setBackground(shape(color,BORDER,3));return b;}
     private void addAction(LinearLayout root,String label,int color,View.OnClickListener listener){Button b=compactButton(label,color);b.setTextSize(16);b.setOnClickListener(listener);root.addView(b,new LinearLayout.LayoutParams(-1,dp(58)));}
     private void addSmallAction(LinearLayout root,String label,View.OnClickListener listener){Button b=compactButton(label,CARD);b.setOnClickListener(listener);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(48),1f);p.setMargins(dp(3),0,dp(3),0);root.addView(b,p);}
     private int dp(int value){return (int)(value*getResources().getDisplayMetrics().density+0.5f);}
@@ -454,7 +480,9 @@ public class MainActivity extends Activity {
 
     private void log(final String s){if(logView==null)return;runOnUiThread(new Runnable(){public void run(){logView.append(s+"\n");if(logScroll!=null)logScroll.post(new Runnable(){public void run(){logScroll.fullScroll(View.FOCUS_DOWN);}});}});}
 
-    @Override protected void onResume(){super.onResume();if(device==null)scan();if(device!=null&&usbManager.hasPermission(device)&&!captureRunning&&getSharedPreferences("ui_settings",MODE_PRIVATE).getBoolean("auto_reconnect",true))openAndStart();}
+    @Override protected void onResume(){super.onResume();performanceHandler.removeCallbacks(performanceTick);performanceHandler.post(performanceTick);if(device==null)scan();if(device!=null&&usbManager.hasPermission(device)&&!captureRunning&&getSharedPreferences("ui_settings",MODE_PRIVATE).getBoolean("auto_reconnect",true))openAndStart();}
 
-    @Override protected void onDestroy(){if(xp2Input!=null)xp2Input.close();stopCapture();closeConnection();deckA.release();deckB.release();try{unregisterReceiver(usbReceiver);}catch(Exception ignored){}super.onDestroy();}
+    @Override protected void onPause(){performanceHandler.removeCallbacks(performanceTick);super.onPause();}
+
+    @Override protected void onDestroy(){performanceHandler.removeCallbacks(performanceTick);if(xp2Input!=null)xp2Input.close();stopCapture();closeConnection();deckA.release();deckB.release();try{unregisterReceiver(usbReceiver);}catch(Exception ignored){}super.onDestroy();}
 }

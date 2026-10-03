@@ -82,6 +82,11 @@ public class DeckEngine implements Playback {
         } catch (IllegalStateException ignored) {}
     }
 
+    public int getDurationMs() {
+        if(player==null)return 0;
+        try{return player.getDuration();}catch(IllegalStateException e){return 0;}
+    }
+
     public int getPositionMs() {
         if (player == null) return 0;
         try { return player.getCurrentPosition(); } catch (IllegalStateException e) { return 0; }
