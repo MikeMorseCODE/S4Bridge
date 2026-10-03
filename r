@@ -21,9 +21,12 @@ src/com/s4bridge/app/core/Playback.java \
 src/com/s4bridge/app/core/CueController.java \
 src/com/s4bridge/app/core/ControllerRouter.java \
 src/com/s4bridge/app/core/TrackLibrary.java \
+src/com/s4bridge/app/core/MidiLearnRouter.java \
 src/com/s4bridge/app/engine/DeckEngine.java \
 src/com/s4bridge/app/engine/MixerEngine.java \
 src/com/s4bridge/app/hardware/S4Mk2Mapping.java \
+src/com/s4bridge/app/hardware/MidiStreamParser.java \
+src/com/s4bridge/app/hardware/Xp2MidiDevice.java \
 src/com/s4bridge/app/MainActivity.java
 
 dx --dex --output=build/dex/classes.dex build/classes

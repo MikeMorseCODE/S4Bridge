@@ -9,7 +9,10 @@ mkdir -p "$OUT"
 javac -source 8 -target 8 -Xlint:-options -d "$OUT" \
     src/com/s4bridge/app/core/*.java \
     src/com/s4bridge/app/hardware/S4Mk2Mapping.java \
+    src/com/s4bridge/app/hardware/MidiStreamParser.java \
     tests/*.java
 
 java -cp "$OUT" CoreBehaviorTest
 java -cp "$OUT" S4Mk2MappingTest
+
+java -cp "$OUT" Xp2MidiTest

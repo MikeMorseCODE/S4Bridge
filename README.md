@@ -48,6 +48,10 @@ Run all platform-independent behavior and HID parser checks without Gradle or an
 ./test-jvm
 ```
 
+## DDJ-XP2 expansion
+
+The **MIDI** tab supports independent XP2 USB-MIDI input, a live monitor, and saved note learning for Deck A/B PLAY, CUE and LOAD. See [XP2 setup and limitations](docs/XP2-MIDI.md). Performance modes and LED output are a later milestone; hardware validation is pending.
+
 ## Attribution
 
 The S4 MK2 HID mapping was ported from the open-source Mixxx controller mapping. This project is intended to remain GPL-2.0-or-later compatible.
